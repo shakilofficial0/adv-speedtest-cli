@@ -8,7 +8,15 @@ Email: shakilofficial0@gmail.com
 
 import os
 import sys
+import json
+import requests
 from typing import Optional
+from pathlib import Path
+from datetime import datetime, timedelta
+from colorama import Fore, Style, init
+
+# Initialize colorama for cross-platform colored output
+init(autoreset=True)
 
 
 class Config:
@@ -22,6 +30,369 @@ class Config:
 ░▀▀█░█▀▀░█▀▀░█▀▀░█░█░░█░░█▀▀░▀▀█░░█░░▄▄▄░█░░░█░░░░█░
 ░▀▀▀░▀░░░▀▀▀░▀▀▀░▀▀░░░▀░░▀▀▀░▀▀▀░░▀░░░░░░▀▀▀░▀▀▀░▀▀▀
 """
+    # API endpoints
+    SPEEDTEST_LOGIN_API = "https://api.speedtest.net/user-login.php"
+    
+    @staticmethod
+    def get_cookies_file_path() -> Path:
+        """Get cross-platform cookies storage path"""
+        if os.name == 'nt':  # Windows
+            app_data = os.getenv('APPDATA') or os.path.expanduser('~')
+            cookies_dir = Path(app_data) / 'advanced-speedtest-cli'
+        else:  # macOS and Linux
+            cookies_dir = Path.home() / '.advanced-speedtest-cli'
+        
+        cookies_dir.mkdir(parents=True, exist_ok=True)
+        return cookies_dir / 'cookies.json'
+
+
+class CookieManager:
+    """Manage authentication cookies for speedtest.net"""
+    
+    @staticmethod
+    def save_cookies(email: str, cookies: dict, expiration: Optional[str] = None) -> None:
+        """Save cookies to file for a specific email
+        
+        Args:
+            email: User email
+            cookies: Dictionary of cookies to store
+            expiration: Expiration timestamp (from response headers), if available
+        """
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            # Load existing cookies
+            if cookies_file.exists():
+                with open(cookies_file, 'r') as f:
+                    all_cookies = json.load(f)
+            else:
+                all_cookies = {}
+            
+            # Calculate expiration time if not provided
+            if not expiration and cookies:
+                # Look for expiration in cookies
+                for key, value in cookies.items():
+                    if isinstance(value, dict) and 'expires' in value:
+                        expiration = value['expires']
+                        break
+            
+            # Store cookies with metadata
+            all_cookies[email] = {
+                'cookies': cookies,
+                'saved_at': datetime.now().isoformat(),
+                'expires_at': expiration or None
+            }
+            
+            # Save to file
+            with open(cookies_file, 'w') as f:
+                json.dump(all_cookies, f, indent=2)
+            
+        except Exception as e:
+            print(f"✗ Error saving cookies: {str(e)}")
+    
+    @staticmethod
+    def load_cookies(email: str) -> Optional[dict]:
+        """Load cookies for a specific email"""
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if not cookies_file.exists():
+                return None
+            
+            with open(cookies_file, 'r') as f:
+                all_cookies = json.load(f)
+            
+            user_data = all_cookies.get(email)
+            if user_data and isinstance(user_data, dict):
+                # Handle both old format (direct cookies) and new format (with metadata)
+                if 'cookies' in user_data:
+                    return user_data['cookies']
+                else:
+                    return user_data
+            
+            return None
+        
+        except Exception as e:
+            print(f"✗ Error loading cookies: {str(e)}")
+            return None
+    
+    @staticmethod
+    def is_cookie_expired(email: str) -> bool:
+        """Check if stored cookies have expired"""
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if not cookies_file.exists():
+                return True
+            
+            with open(cookies_file, 'r') as f:
+                all_cookies = json.load(f)
+            
+            user_data = all_cookies.get(email)
+            if not user_data:
+                return True
+            
+            # If new format with metadata
+            if isinstance(user_data, dict) and 'expires_at' in user_data:
+                expires_at = user_data.get('expires_at')
+                if expires_at:
+                    try:
+                        expiry_datetime = datetime.fromisoformat(expires_at)
+                        return datetime.now() > expiry_datetime
+                    except ValueError:
+                        # If we can't parse the date, assume not expired
+                        return False
+                return False
+            
+            # If old format (direct cookies), assume not expired
+            return False
+        
+        except Exception as e:
+            print(f"✗ Error checking cookie expiration: {str(e)}")
+            return True
+    
+    @staticmethod
+    def get_cookie_expiration(email: str) -> Optional[str]:
+        """Get expiration date string for a user's cookies"""
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if not cookies_file.exists():
+                return None
+            
+            with open(cookies_file, 'r') as f:
+                all_cookies = json.load(f)
+            
+            user_data = all_cookies.get(email)
+            if isinstance(user_data, dict) and 'expires_at' in user_data:
+                return user_data.get('expires_at')
+            
+            return None
+        
+        except Exception as e:
+            print(f"✗ Error getting cookie expiration: {str(e)}")
+            return None
+    
+    @staticmethod
+    def delete_cookies(email: str) -> None:
+        """Delete cookies for a specific email"""
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if not cookies_file.exists():
+                return
+            
+            with open(cookies_file, 'r') as f:
+                all_cookies = json.load(f)
+            
+            if email in all_cookies:
+                del all_cookies[email]
+                
+                with open(cookies_file, 'w') as f:
+                    json.dump(all_cookies, f, indent=2)
+        
+        except Exception as e:
+            print(f"✗ Error deleting cookies: {str(e)}")
+    
+    @staticmethod
+    def get_cached_users() -> list:
+        """Get list of all cached/previously logged-in users"""
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if not cookies_file.exists():
+                return []
+            
+            with open(cookies_file, 'r') as f:
+                all_cookies = json.load(f)
+            
+            return list(all_cookies.keys())
+        
+        except Exception as e:
+            print(f"✗ Error reading cached users: {str(e)}")
+            return []
+
+
+class LoginManager:
+    """Handle speedtest.net authentication and login"""
+    
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    
+    @staticmethod
+    def fetch_session_cookie() -> Optional[dict]:
+        """Fetch initial session cookie from speedtest.net"""
+        try:
+            headers = {
+                'User-Agent': LoginManager.USER_AGENT,
+                'Referer': 'https://api.speedtest.net/user-login.php'
+            }
+            
+            response = requests.get(
+                Config.SPEEDTEST_LOGIN_API,
+                headers=headers,
+                timeout=10,
+                allow_redirects=False
+            )
+            
+            # Extract cookies from response
+            if response.cookies:
+                return dict(response.cookies)
+            
+            return None
+        
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Error fetching session: {str(e)}")
+            return None
+    
+    @staticmethod
+    def verify_cached_login(email: str) -> bool:
+        """Verify if cached login is still valid"""
+        cookies = CookieManager.load_cookies(email)
+        
+        if not cookies:
+            return False
+        
+        try:
+            headers = {
+                'User-Agent': LoginManager.USER_AGENT,
+                'Referer': 'https://api.speedtest.net/user-login.php'
+            }
+            
+            # Verify cached cookies by making a GET request
+            response = requests.get(
+                Config.SPEEDTEST_LOGIN_API,
+                headers=headers,
+                cookies=cookies,
+                timeout=10,
+                allow_redirects=False
+            )
+            
+            # If cookies are valid and user is authenticated, we should get a redirect or success
+            return response.status_code in [200, 302]
+        
+        except requests.exceptions.RequestException:
+            return False
+    
+    @staticmethod
+    def login_with_credentials(email: str, password: str) -> Optional[str]:
+        """Login with email and password
+        
+        Returns email if successful (status 302), None if failed (status 200)
+        """
+        try:
+            # Step 1: Fetch initial session cookie
+            print("Fetching session...")
+            session_cookies = LoginManager.fetch_session_cookie()
+            
+            if not session_cookies:
+                print("✗ Failed to fetch session")
+                return None
+            
+            # Step 2: Login with credentials
+            print("Authenticating...")
+            headers = {
+                'User-Agent': LoginManager.USER_AGENT,
+                'Origin': 'https://api.speedtest.net',
+                'Referer': 'https://api.speedtest.net/user-login.php',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+            
+            login_data = {
+                'action': 'login',
+                'email': email,
+                'password': password,
+                'remember-me': 'on'
+            }
+            
+            response = requests.post(
+                Config.SPEEDTEST_LOGIN_API,
+                data=login_data,
+                headers=headers,
+                cookies=session_cookies,
+                timeout=10,
+                allow_redirects=False
+            )
+            
+            # Status 302 means redirect (successful login)
+            if response.status_code == 302:
+                # Merge new cookies with session cookies
+                all_cookies = {**session_cookies}
+                if response.cookies:
+                    all_cookies.update(dict(response.cookies))
+                
+                # Extract expiration time from Set-Cookie headers
+                expiration = None
+                if 'set-cookie' in response.headers:
+                    # Parse Set-Cookie header for Max-Age or expires
+                    cookie_header = response.headers['set-cookie']
+                    if 'Max-Age=' in cookie_header:
+                        try:
+                            max_age_str = cookie_header.split('Max-Age=')[1].split(';')[0]
+                            max_age = int(max_age_str)
+                            expiration_datetime = datetime.now()
+                            from datetime import timedelta
+                            expiration_datetime += timedelta(seconds=max_age)
+                            expiration = expiration_datetime.isoformat()
+                        except (ValueError, IndexError):
+                            pass
+                
+                CookieManager.save_cookies(email, all_cookies, expiration)
+                print(f"✓ Login successful!")
+                return email
+            # Status 200 means failed login
+            elif response.status_code == 200:
+                print("✗ Invalid credentials")
+                return None
+            else:
+                print(f"✗ Unexpected response status: {response.status_code}")
+                return None
+        
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Login failed: {str(e)}")
+            return None
+        except KeyboardInterrupt:
+            raise
+    
+    @staticmethod
+    def logout_with_cookies(email: str) -> bool:
+        """Logout using stored cookies
+        
+        Sends GET request to logout endpoint. Returns True regardless of status code.
+        """
+        try:
+            cookies = CookieManager.load_cookies(email)
+            
+            if not cookies:
+                print("✗ No cached cookies found")
+                return False
+            
+            print("Logging out...")
+            headers = {
+                'User-Agent': LoginManager.USER_AGENT,
+                'Referer': 'https://api.speedtest.net/user-logout.php'
+            }
+            
+            response = requests.get(
+                'https://api.speedtest.net/user-logout.php',
+                headers=headers,
+                cookies=cookies,
+                timeout=10,
+                allow_redirects=False
+            )
+            
+            # Status 302 or 200 both mean logout successful
+            if response.status_code in [200, 302]:
+                print("✓ Logout successful!")
+                return True
+            else:
+                print(f"✗ Logout failed with status {response.status_code}")
+                return False
+        
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Logout error: {str(e)}")
+            return False
+        except KeyboardInterrupt:
+            raise
 
 
 class State:
@@ -133,11 +504,11 @@ class Display:
 
 
 class AuthManager:
-    """Handle authentication operations"""
+    """Handle authentication operations - UI layer"""
     
     @staticmethod
     def login() -> Optional[str]:
-        """Handle user login"""
+        """Handle user login with UI"""
         try:
             Display.print_header()
             print("LOGIN")
@@ -145,24 +516,112 @@ class AuthManager:
             print("(Press Ctrl+C to go back to main menu)")
             print("=" * 50)
             print()
-            username = input("Enter username or email: ").strip()
-            password = input("Enter password: ").strip()
             
-            # TODO: Implement actual authentication with database
-            if username and password:
-                print(f"✓ Login successful! Welcome {username}")
-                input("Press Enter to continue...")
-                return username
+            # Get cached users
+            cached_users = CookieManager.get_cached_users()
+            
+            if cached_users:
+                print("Previously logged-in users:")
+                print("-" * 50)
+                for idx, user_email in enumerate(cached_users, 1):
+                    # Check if cookie is expired
+                    is_expired = CookieManager.is_cookie_expired(user_email)
+                    expiration_str = CookieManager.get_cookie_expiration(user_email)
+                    
+                    if is_expired:
+                        print(f"{idx}. {user_email} {Fore.RED}[EXPIRED]{Style.RESET_ALL}")
+                    elif expiration_str:
+                        print(f"{idx}. {user_email} (Expires: {expiration_str})")
+                    else:
+                        print(f"{idx}. {user_email}")
+                
+                print(f"{len(cached_users) + 1}. New Login")
+                print("-" * 50)
+                print()
+                
+                try:
+                    choice = input("Select user or enter new login (number): ").strip()
+                    choice_num = int(choice)
+                    
+                    # Check if user selected a cached user
+                    if 1 <= choice_num <= len(cached_users):
+                        selected_email = cached_users[choice_num - 1]
+                        
+                        # Check if cookies are expired
+                        if CookieManager.is_cookie_expired(selected_email):
+                            print("\n✗ Cached login expired. Please enter password.")
+                            password = input("Enter password: ").strip()
+                            result = LoginManager.login_with_credentials(selected_email, password)
+                            if result:
+                                print(f"✓ Login successful! Welcome {selected_email}")
+                                input("Press Enter to continue...")
+                                return result
+                            else:
+                                input("Press Enter to continue...")
+                                return None
+                        
+                        # Verify cached login
+                        print("\nVerifying cached login...")
+                        if LoginManager.verify_cached_login(selected_email):
+                            print(f"✓ Login successful! Welcome {selected_email}")
+                            input("Press Enter to continue...")
+                            return selected_email
+                        else:
+                            print("✗ Cached login verification failed. Please enter password.")
+                            password = input("Enter password: ").strip()
+                            result = LoginManager.login_with_credentials(selected_email, password)
+                            if result:
+                                print(f"✓ Login successful! Welcome {selected_email}")
+                                input("Press Enter to continue...")
+                                return result
+                            else:
+                                input("Press Enter to continue...")
+                                return None
+                    # User chose "New Login"
+                    elif choice_num == len(cached_users) + 1:
+                        email = input("Enter email: ").strip()
+                        password = input("Enter password: ").strip()
+                        
+                        result = LoginManager.login_with_credentials(email, password)
+                        
+                        if result:
+                            print(f"✓ Login successful! Welcome {email}")
+                            input("Press Enter to continue...")
+                            return result
+                        else:
+                            input("Press Enter to continue...")
+                            return None
+                    else:
+                        print("✗ Invalid selection")
+                        input("Press Enter to continue...")
+                        return None
+                
+                except ValueError:
+                    print("✗ Invalid input. Please enter a number.")
+                    input("Press Enter to continue...")
+                    return None
+            
             else:
-                print("✗ Invalid credentials")
-                input("Press Enter to continue...")
-                return None
+                # No cached users, proceed with new login
+                email = input("Enter email: ").strip()
+                password = input("Enter password: ").strip()
+                
+                result = LoginManager.login_with_credentials(email, password)
+                
+                if result:
+                    print(f"✓ Login successful! Welcome {email}")
+                    input("Press Enter to continue...")
+                    return result
+                else:
+                    input("Press Enter to continue...")
+                    return None
+        
         except KeyboardInterrupt:
             raise  # Re-raise to be caught by the menu handler
     
     @staticmethod
-    def logout() -> None:
-        """Handle user logout"""
+    def logout(email: str) -> None:
+        """Handle user logout with UI"""
         try:
             Display.print_header()
             print("LOGOUT")
@@ -170,8 +629,24 @@ class AuthManager:
             print("(Press Ctrl+C to go back to main menu)")
             print("=" * 50)
             print()
-            print("✓ Logged out successfully")
+            
+            confirm = input(f"Logout from {email}? (y/n): ").strip().lower()
+            if confirm == 'y':
+                # Send logout request to API
+                logout_success = LoginManager.logout_with_cookies(email)
+                
+                # Remove cached cookies regardless of logout response
+                CookieManager.delete_cookies(email)
+                
+                if logout_success:
+                    print(f"✓ Logged out successfully")
+                else:
+                    print(f"✓ Cookies cleared locally")
+            else:
+                print("✗ Logout cancelled")
+            
             input("Press Enter to continue...")
+        
         except KeyboardInterrupt:
             raise  # Re-raise to be caught by the menu handler
 
@@ -357,7 +832,7 @@ class MenuHandler:
                 return True
             
             elif "Logout" in action:
-                AuthManager.logout()
+                AuthManager.logout(self.state.current_user)
                 self.state.logout()
                 return True
             
