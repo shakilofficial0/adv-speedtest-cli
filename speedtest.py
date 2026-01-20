@@ -395,12 +395,233 @@ class LoginManager:
             raise
 
 
+class ServerManager:
+    """Handle speedtest server operations"""
+    
+    CONFIG_API = "https://www.speedtest.net/api/js/config-sdk?engine=js&limit=10&https_functional=true"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    
+    
+    @staticmethod
+    def get_or_create_anonymous_user() -> str:
+        """Get or create anonymous user for non-logged-in users"""
+        anonymous_email = "anonymous_user"
+        
+        # Check if anonymous user already has cookies
+        existing_cookies = CookieManager.load_cookies(anonymous_email)
+        if existing_cookies:
+            return anonymous_email
+        
+        # Create anonymous user with empty cookies
+        CookieManager.save_cookies(anonymous_email, {})
+        return anonymous_email
+    
+    @staticmethod
+    def fetch_server_config(user_email: Optional[str] = None) -> Optional[dict]:
+        """Fetch server configuration from speedtest API
+        
+        Args:
+            user_email: User email to use cookies from. If None, uses anonymous user.
+            
+        Returns:
+            dict with config data including servers, or None if failed
+        """
+        try:
+            # Use anonymous user if no email provided
+            if not user_email:
+                user_email = ServerManager.get_or_create_anonymous_user()
+            
+            # Load cookies for user
+            cookies = CookieManager.load_cookies(user_email)
+            if not cookies:
+                cookies = {}
+            
+            print("Fetching server configuration...")
+            headers = {
+                'User-Agent': ServerManager.USER_AGENT,
+                'Referer': 'https://www.speedtest.net/'
+            }
+            
+            response = requests.get(
+                ServerManager.CONFIG_API,
+                headers=headers,
+                cookies=cookies,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                config_data = response.json()
+                
+                # Store token and guid in user data
+                if 'clientAuth' in config_data and 'token' in config_data['clientAuth']:
+                    ServerManager._save_client_auth(user_email, config_data['clientAuth'], config_data.get('guid'))
+                
+                print(f"✓ Server configuration fetched successfully!")
+                return config_data
+            else:
+                print(f"✗ Failed to fetch config (Status: {response.status_code})")
+                return None
+        
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Error fetching server config: {str(e)}")
+            return None
+        except ValueError as e:
+            print(f"✗ Invalid response format: {str(e)}")
+            return None
+        except KeyboardInterrupt:
+            raise
+    
+    @staticmethod
+    def _save_client_auth(user_email: str, client_auth: dict, guid: Optional[str]) -> None:
+        """Save client auth token and guid to user data"""
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if cookies_file.exists():
+                with open(cookies_file, 'r') as f:
+                    all_data = json.load(f)
+            else:
+                all_data = {}
+            
+            if user_email not in all_data:
+                all_data[user_email] = {}
+            
+            user_data = all_data[user_email]
+            if isinstance(user_data, dict):
+                user_data['client_auth'] = client_auth
+                if guid:
+                    user_data['guid'] = guid
+            
+            with open(cookies_file, 'w') as f:
+                json.dump(all_data, f, indent=2)
+        
+        except Exception as e:
+            print(f"✗ Error saving client auth: {str(e)}")
+    
+    @staticmethod
+    def pick_random_server(servers: list) -> Optional[dict]:
+        """Pick a random server from the list
+        
+        Args:
+            servers: List of server dictionaries
+            
+        Returns:
+            Random server dict or None if list is empty
+        """
+        if not servers:
+            return None
+        
+        import random
+        return random.choice(servers)
+    
+    @staticmethod
+    def fetch_search_results(search_query: str, user_email: Optional[str] = None) -> Optional[dict]:
+        """Fetch servers matching search criteria
+        
+        Args:
+            search_query: Search query (ISP, server name, or location)
+            user_email: User email to use cookies from. If None, uses anonymous user.
+            
+        Returns:
+            dict with config data including filtered servers, or None if failed
+        """
+        try:
+            # Use anonymous user if no email provided
+            if not user_email:
+                user_email = ServerManager.get_or_create_anonymous_user()
+            
+            # Load cookies for user
+            cookies = CookieManager.load_cookies(user_email)
+            if not cookies:
+                cookies = {}
+            
+            # URL encode the search query
+            from urllib.parse import quote
+            encoded_query = quote(search_query)
+            
+            search_api = f"https://www.speedtest.net/api/js/config-sdk?engine=js&limit=30&https_functional=true&search={encoded_query}"
+            
+            print(f"Searching for servers matching '{search_query}'...")
+            headers = {
+                'User-Agent': ServerManager.USER_AGENT,
+                'Referer': 'https://www.speedtest.net/'
+            }
+            
+            response = requests.get(
+                search_api,
+                headers=headers,
+                cookies=cookies,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                config_data = response.json()
+                
+                # Store token and guid in user data
+                if 'clientAuth' in config_data and 'token' in config_data['clientAuth']:
+                    ServerManager._save_client_auth(user_email, config_data['clientAuth'], config_data.get('guid'))
+                
+                if 'servers' in config_data and config_data['servers']:
+                    print(f"✓ Found {len(config_data['servers'])} server(s) matching your search!")
+                else:
+                    print("✗ No servers found matching your search criteria.")
+                
+                return config_data
+            else:
+                print(f"✗ Failed to search servers (Status: {response.status_code})")
+                return None
+        
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Error searching servers: {str(e)}")
+            return None
+        except ValueError as e:
+            print(f"✗ Invalid response format: {str(e)}")
+            return None
+        except KeyboardInterrupt:
+            raise
+    
+    @staticmethod
+    def get_distance_color(distance: float) -> str:
+        """Get color code based on distance
+        
+        Distance ranges:
+        0-100km: Green
+        100-500km: Cyan
+        500-1000km: Yellow
+        1000-2000km: Magenta
+        2000+km: Red
+        """
+        if distance <= 100:
+            return Fore.GREEN
+        elif distance <= 500:
+            return Fore.CYAN
+        elif distance <= 1000:
+            return Fore.YELLOW
+        elif distance <= 2000:
+            return Fore.MAGENTA
+        else:
+            return Fore.RED
+    
+    @staticmethod
+    def get_server_display_name(server: dict) -> str:
+        """Get formatted display name for a server with color-coded distance"""
+        sponsor = server.get('sponsor', 'Unknown')
+        name = server.get('name', 'Unknown')
+        distance = server.get('distance', 0)
+        country = server.get('country', 'Unknown')
+        
+        distance_color = ServerManager.get_distance_color(distance)
+        distance_str = f"{distance_color}{distance}km{Style.RESET_ALL}"
+        
+        return f"{sponsor} - {name}, {country} ({distance_str})"
+
+
 class State:
     """Application state management"""
     def __init__(self):
         self.is_logged_in = False
         self.current_user = None
-        self.selected_server = None
+        self.selected_server = None  # Store full server dict
     
     def login(self, username: str):
         """Set user as logged in"""
@@ -412,15 +633,25 @@ class State:
         self.is_logged_in = False
         self.current_user = None
     
-    def set_server(self, server_name: str):
-        """Set selected server"""
-        self.selected_server = server_name
+    def set_server(self, server_dict: Optional[dict]):
+        """Set selected server
+        
+        Args:
+            server_dict: Server dictionary from API or None for auto-pick
+        """
+        self.selected_server = server_dict
     
     def get_server_display(self) -> str:
         """Get server display text"""
         if self.selected_server is None:
             return "Auto Pick"
-        return self.selected_server
+        
+        # If it's a dict, get the display name
+        if isinstance(self.selected_server, dict):
+            return ServerManager.get_server_display_name(self.selected_server)
+        
+        # Fallback for string (legacy)
+        return str(self.selected_server)
 
 
 class Display:
@@ -463,9 +694,14 @@ class Display:
             menu_items.append((menu_number, "Login"))
             menu_number += 1
         
-        # Server selection
+        # Server selection with color coding
         server_display = state.get_server_display()
-        menu_items.append((menu_number, f"Select Server ({server_display})"))
+        if server_display == "Auto Pick":
+            colored_server = f"{Fore.YELLOW}{server_display}{Style.RESET_ALL}"
+        else:
+            colored_server = f"{Fore.GREEN}{server_display}{Style.RESET_ALL}"
+        
+        menu_items.append((menu_number, f"Select Server ({colored_server})"))
         menu_number += 1
         
         # Speed test options
@@ -517,8 +753,9 @@ class AuthManager:
             print("=" * 50)
             print()
             
-            # Get cached users
-            cached_users = CookieManager.get_cached_users()
+            # Get cached users (excluding anonymous_user)
+            all_cached_users = CookieManager.get_cached_users()
+            cached_users = [u for u in all_cached_users if u != "anonymous_user"]
             
             if cached_users:
                 print("Previously logged-in users:")
@@ -651,21 +888,83 @@ class AuthManager:
             raise  # Re-raise to be caught by the menu handler
 
 
-class ServerManager:
-    """Handle server selection"""
-    
-    # Placeholder servers - can be expanded
-    AVAILABLE_SERVERS = [
-        "Server 1 - New York",
-        "Server 2 - Los Angeles",
-        "Server 3 - London",
-        "Server 4 - Tokyo",
-        "Server 5 - Sydney",
-    ]
+class ServerSelectionUI:
+    """Handle server selection UI - wrapper around ServerManager"""
     
     @staticmethod
-    def select_server() -> Optional[str]:
-        """Handle server selection"""
+    def search_server(current_user: Optional[str] = None) -> Optional[dict]:
+        """Handle server search functionality
+        
+        Args:
+            current_user: Currently logged-in user email
+            
+        Returns:
+            Selected server dict or None if cancelled
+        """
+        try:
+            Display.print_header()
+            print("SEARCH SERVER")
+            print("=" * 50)
+            print("(Press Ctrl+C to go back to main menu)")
+            print("=" * 50)
+            print()
+            
+            search_query = input("Enter search criteria (ISP/Server/Location): ").strip()
+            
+            if not search_query:
+                print("✗ Search query cannot be empty")
+                input("Press Enter to continue...")
+                return None
+            
+            print()
+            # Fetch search results
+            config = ServerManager.fetch_search_results(search_query, current_user)
+            
+            if not config or 'servers' not in config or not config['servers']:
+                print("✗ No servers found")
+                input("Press Enter to continue...")
+                return None
+            
+            servers = config['servers']
+            
+            print()
+            for idx, server in enumerate(servers, 1):
+                display_name = ServerManager.get_server_display_name(server)
+                print(f"{idx}. {display_name}")
+            
+            print("=" * 50)
+            print()
+            
+            choice = int(input("Select server number: ").strip())
+            
+            if 1 <= choice <= len(servers):
+                selected_server = servers[choice - 1]
+                display_name = ServerManager.get_server_display_name(selected_server)
+                print(f"✓ Server selected: {display_name}")
+                input("Press Enter to continue...")
+                return selected_server
+            else:
+                print("✗ Invalid selection")
+                input("Press Enter to continue...")
+                return None
+        
+        except ValueError:
+            print("✗ Invalid input. Please enter a number.")
+            input("Press Enter to continue...")
+            return None
+        except KeyboardInterrupt:
+            raise
+    
+    @staticmethod
+    def select_server(current_user: Optional[str] = None) -> Optional[dict]:
+        """Handle server selection UI
+        
+        Args:
+            current_user: Currently logged-in user email
+            
+        Returns:
+            Selected server dict or None for auto-pick
+        """
         try:
             Display.print_header()
             print("SELECT SERVER")
@@ -673,30 +972,60 @@ class ServerManager:
             print("(Press Ctrl+C to go back to main menu)")
             print("=" * 50)
             print()
-            print("0. Auto Pick (Nearest Server)")
             
-            for idx, server in enumerate(ServerManager.AVAILABLE_SERVERS, 1):
-                print(f"{idx}. {server}")
+            # Fetch server configuration
+            config = ServerManager.fetch_server_config(current_user)
             
+            if not config or 'servers' not in config:
+                print("✗ Failed to load servers")
+                input("Press Enter to continue...")
+                return None
+            
+            servers = config['servers']
+            
+            print("\n0. Auto Pick (Nearest Server)")
+            for idx, server in enumerate(servers, 1):
+                display_name = ServerManager.get_server_display_name(server)
+                print(f"{idx}. {display_name}")
+            
+            total_options = len(servers) + 1  # +1 for search option
+            print(f"{total_options}. Search Server")
             print("=" * 50)
+            print()
             
             choice = int(input("Select server number: ").strip())
             
             if choice == 0:
-                print("✓ Server set to: Auto Pick")
+                # Auto pick - choose random server
+                selected_server = ServerManager.pick_random_server(servers)
+                if selected_server:
+                    display_name = ServerManager.get_server_display_name(selected_server)
+                    print(f"✓ Server set to: {display_name} (Auto Pick)")
+                    input("Press Enter to continue...")
+                    return selected_server
+                else:
+                    print("✗ No servers available")
+                    input("Press Enter to continue...")
+                    return None
+            
+            elif 1 <= choice <= len(servers):
+                selected_server = servers[choice - 1]
+                display_name = ServerManager.get_server_display_name(selected_server)
+                print(f"✓ Server selected: {display_name}")
                 input("Press Enter to continue...")
-                return None
-            elif 1 <= choice <= len(ServerManager.AVAILABLE_SERVERS):
-                selected = ServerManager.AVAILABLE_SERVERS[choice - 1]
-                print(f"✓ Server selected: {selected}")
-                input("Press Enter to continue...")
-                return selected
+                return selected_server
+            
+            elif choice == total_options:
+                # Call search server
+                return ServerSelectionUI.search_server(current_user)
+            
             else:
                 print("✗ Invalid selection")
                 input("Press Enter to continue...")
                 return None
+        
         except ValueError:
-            print("✗ Invalid input")
+            print("✗ Invalid input. Please enter a number.")
             input("Press Enter to continue...")
             return None
         except KeyboardInterrupt:
@@ -799,9 +1128,9 @@ class MenuHandler:
                 return True
             
             elif "Select Server" in action:
-                server = ServerManager.select_server()
-                if server is not None or server == "Auto Pick":
-                    self.state.set_server(server)
+                server = ServerSelectionUI.select_server(self.state.current_user)
+                # server can be None (auto-pick) or a dict (selected server)
+                self.state.set_server(server)
                 return True
             
             elif "Run SpeedTest and Share" in action:
