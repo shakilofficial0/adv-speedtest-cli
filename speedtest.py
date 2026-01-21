@@ -1328,12 +1328,49 @@ class SpeedTest:
             if not server and state:
                 print("Fetching server list...")
                 config = ServerManager.fetch_server_config(state.current_user)
-                if config and 'servers' in config:
+                
+                # Check if server fetch failed
+                if not config:
+                    print()
+                    print("=" * 50)
+                    print(f"{Fore.RED}✗ ERROR{Style.RESET_ALL}")
+                    print("=" * 50)
+                    print("Failed to fetch server list.")
+                    print("This usually means:")
+                    print("  • No internet connection")
+                    print("  • Speedtest server is unavailable")
+                    print("  • Network is blocked")
+                    print("=" * 50)
+                    input("Press Enter to go back to main menu...")
+                    return {
+                        "ping": 0,
+                        "download": 0,
+                        "upload": 0,
+                        "server": "N/A",
+                        "error": "Server fetch failed"
+                    }
+                
+                if 'servers' in config:
                     servers = config['servers']
                     if servers:
                         server = ServerManager.pick_random_server(servers)
                         state.set_server(server)
                         print("✓ Server auto-selected\n")
+                    else:
+                        print()
+                        print("=" * 50)
+                        print(f"{Fore.RED}✗ ERROR{Style.RESET_ALL}")
+                        print("=" * 50)
+                        print("No servers available in the response.")
+                        print("=" * 50)
+                        input("Press Enter to go back to main menu...")
+                        return {
+                            "ping": 0,
+                            "download": 0,
+                            "upload": 0,
+                            "server": "N/A",
+                            "error": "No servers available"
+                        }
             
             if server:
                 print("SERVER INFORMATION")
@@ -1378,16 +1415,16 @@ class SpeedTest:
                     else:
                         print("✗ Ping test failed")
                         # Fallback to demo data
-                        demo_ping_times = [25.3, 24.8, 25.1, 24.9, 25.2, 25.0, 24.7, 25.4, 25.1, 25.0]
+                        demo_ping_times = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
                         ping_stats = PingTest.calculate_ping_stats(demo_ping_times)
                 except Exception as e:
                     print(f"✗ Error during ping test: {str(e)}")
                     # Fallback to demo data
-                    demo_ping_times = [25.3, 24.8, 25.1, 24.9, 25.2, 25.0, 24.7, 25.4, 25.1, 25.0]
+                    demo_ping_times = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
                     ping_stats = PingTest.calculate_ping_stats(demo_ping_times)
             else:
                 # No server available, use demo data
-                demo_ping_times = [25.3, 24.8, 25.1, 24.9, 25.2, 25.0, 24.7, 25.4, 25.1, 25.0]
+                demo_ping_times = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
                 ping_stats = PingTest.calculate_ping_stats(demo_ping_times)
             
             print()
@@ -1429,100 +1466,35 @@ class SpeedTest:
             print("=" * 50)
             print()
             
-            # Show User Information
-            if state and state.current_user:
-                print("USER INFORMATION")
-                print("-" * 50)
-                print(f"Username: {state.current_user}")
-                
-                # Try to load and display user data
-                user_data = CookieManager.load_user_data(state.current_user)
-                if user_data:
-                    print(f"Email: {user_data.get('email', 'N/A')}")
-                    print(f"ISP: {user_data.get('isp', 'N/A')}")
-                    location = user_data.get('location', {})
-                    if location:
-                        print(f"Location: {location.get('countryName', 'N/A')}")
-                print()
+            # Call the standard run_test to get base results
+            result = SpeedTest.run_test(state)
             
-            # Show Server Information
-            # Auto-fetch and select server if not already selected
-            server = state.selected_server if state else None
+            # Check if there was an error in the test
+            if "error" in result:
+                # Error was already displayed by run_test, return as-is
+                return {
+                    "ping": result.get("ping", 0),
+                    "download": result.get("download", 0),
+                    "upload": result.get("upload", 0),
+                    "server": result.get("server", "N/A"),
+                    "share_link": "N/A",
+                    "error": result.get("error", "Test failed")
+                }
             
-            if not server and state:
-                print("Fetching server list...")
-                config = ServerManager.fetch_server_config(state.current_user)
-                if config and 'servers' in config:
-                    servers = config['servers']
-                    if servers:
-                        server = ServerManager.pick_random_server(servers)
-                        state.set_server(server)
-                        print("✓ Server auto-selected\n")
+           
             
-            if server:
-                print("SERVER INFORMATION")
-                print("-" * 50)
-                print(f"Sponsor: {server.get('sponsor', 'N/A')}")
-                print(f"Server: {server.get('name', 'N/A')}")
-                print(f"Country: {server.get('country', 'N/A')}")
-                distance_color = ServerManager.get_distance_color(server.get('distance', 0))
-                print(f"Distance: {distance_color}{server.get('distance', 0)}km{Style.RESET_ALL}")
-                print()
+            # Generate a unique share link (placeholder implementation)
+            import hashlib
+            from datetime import datetime
             
-            # Ping Test
-            print("STEP 1: PING TEST")
-            print("-" * 50)
-            print("Measuring latency...\n")
+            test_data = f"{result['ping']}{result['download']}{result['upload']}{datetime.now()}"
+            share_id = hashlib.md5(test_data.encode()).hexdigest()[:8].upper()
+            share_link = f"https://speedtest.example.com/results/{share_id}"
             
-            ping_stats = {}
-            if server:
-                try:
-                    # Run actual WebSocket ping test
-                    ping_times = asyncio.run(PingTest.run_ping_test(server, num_pings=10))
-                    
-                    if ping_times:
-                        ping_stats = PingTest.calculate_ping_stats(ping_times)
-                        print(f"\n✓ Ping Test Complete!")
-                        print(f"  Min: {ping_stats['min']:.2f} ms")
-                        print(f"  Max: {ping_stats['max']:.2f} ms")
-                        print(f"  Avg: {ping_stats['avg']:.2f} ms")
-                    else:
-                        print("✗ Ping test failed")
-                        # Fallback to demo data
-                        demo_ping_times = [25.3, 24.8, 25.1, 24.9, 25.2, 25.0, 24.7, 25.4, 25.1, 25.0]
-                        ping_stats = PingTest.calculate_ping_stats(demo_ping_times)
-                except Exception as e:
-                    print(f"✗ Error during ping test: {str(e)}")
-                    # Fallback to demo data
-                    demo_ping_times = [25.3, 24.8, 25.1, 24.9, 25.2, 25.0, 24.7, 25.4, 25.1, 25.0]
-                    ping_stats = PingTest.calculate_ping_stats(demo_ping_times)
-            else:
-                # No server available, use demo data
-                demo_ping_times = [25.3, 24.8, 25.1, 24.9, 25.2, 25.0, 24.7, 25.4, 25.1, 25.0]
-                ping_stats = PingTest.calculate_ping_stats(demo_ping_times)
             
-            print()
-            
-            print("STEP 2: DOWNLOAD TEST - Demo")
-            print("-" * 50)
-            print("(To be implemented)")
-            print()
-            
-            print("STEP 3: UPLOAD TEST - Demo")
-            print("-" * 50)
-            print("(To be implemented)")
-            print()
-            
-            input("Press Enter to continue...")
-            
-            # Placeholder result
-            return {
-                "ping": ping_stats['avg'],
-                "download": 95.2,
-                "upload": 45.8,
-                "server": "Test Server",
-                "share_link": "https://speedtest.example.com/results/abc123"
-            }
+            # Add share_link to result and return
+            result["share_link"] = share_link
+            return result
         except KeyboardInterrupt:
             raise  # Re-raise to be caught by the menu handler
 
