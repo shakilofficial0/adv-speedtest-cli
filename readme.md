@@ -1,7 +1,8 @@
 # 🚀 Advanced Speedtest CLI
 
+[![PyPI version](https://badge.fury.io/py/adv-speedtest-cli.svg)](https://pypi.org/project/adv-speedtest-cli/)
 [![Python Version](https://img.shields.io/badge/python-3.7+-3776ab?style=flat-square&logo=python)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen?style=flat-square)](https://github.com/shakilofficial0/advanced-speedtest-cli)
+[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen?style=flat-square)](https://github.com/shakilofficial0/adv-speedtest-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-cross--platform-orange?style=flat-square)](README.md)
 
@@ -73,24 +74,38 @@
 
 ## 📦 Installation
 
-### Prerequisites
+### Option 1: Install from PyPI (Recommended)
+
+The easiest way - install directly from PyPI:
+```bash
+pip install adv-speedtest-cli
+```
+
+Then run:
+```bash
+adv-speedtest-cli
+```
+
+### Option 2: Install from Source
+
+**Prerequisites:**
 Ensure Python 3.7+ is installed:
 ```bash
 python --version
 ```
 
-### Step 1: Clone Repository
+**Step 1: Clone Repository**
 ```bash
-git clone https://github.com/shakilofficial0/advanced-speedtest-cli.git
-cd advanced-speedtest-cli
+git clone https://github.com/shakilofficial0/adv-speedtest-cli.git
+cd adv-speedtest-cli
 ```
 
-### Step 2: Install Dependencies
+**Step 2: Install Dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 3: Verify Installation
+**Step 3: Verify Installation**
 ```bash
 python speedtest.py --help
 ```
@@ -99,14 +114,34 @@ python speedtest.py --help
 
 ## ⚡ Quick Start
 
-### Fastest Way - Quick Mode
-Execute immediate speedtest with default settings:
+### Using PyPI Installation
+
+**Quick Mode** - Execute immediate speedtest with default settings:
+```bash
+adv-speedtest-cli --q
+```
+
+**Interactive Mode** - Launch the full-featured menu:
+```bash
+adv-speedtest-cli
+```
+
+### Alternative Commands
+
+You can also use these equivalent commands:
+```bash
+advanced-speedtest
+speedtest-cli
+```
+
+### Using Source Installation
+
+**Quick Mode:**
 ```bash
 python speedtest.py --q
 ```
 
-### Interactive Mode
-Launch the full-featured menu:
+**Interactive Mode:**
 ```bash
 python speedtest.py
 ```
@@ -311,8 +346,8 @@ Contributions are welcome! Please follow these guidelines:
 
 ### Getting Help
 - 📧 **Email**: shakilofficial0@gmail.com
-- 🐛 **Issues**: [GitHub Issues](https://github.com/shakilofficial0/advanced-speedtest-cli/issues)
-- 💡 **Discussions**: [GitHub Discussions](https://github.com/shakilofficial0/advanced-speedtest-cli/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/shakilofficial0/adv-speedtest-cli/issues)
+- 💡 **Discussions**: [GitHub Discussions](https://github.com/shakilofficial0/adv-speedtest-cli/discussions)
 
 ### Troubleshooting
 

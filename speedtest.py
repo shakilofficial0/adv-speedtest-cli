@@ -48,9 +48,9 @@ class Config:
         """Get cross-platform cookies storage path"""
         if os.name == 'nt':  # Windows
             app_data = os.getenv('APPDATA') or os.path.expanduser('~')
-            cookies_dir = Path(app_data) / 'advanced-speedtest-cli'
+            cookies_dir = Path(app_data) / 'adv-speedtest-cli'
         else:  # macOS and Linux
-            cookies_dir = Path.home() / '.advanced-speedtest-cli'
+            cookies_dir = Path.home() / '.adv-speedtest-cli'
         
         cookies_dir.mkdir(parents=True, exist_ok=True)
         return cookies_dir / 'cookies.json'
