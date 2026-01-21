@@ -135,7 +135,7 @@ pip install -r requirements.txt
 ```bash
 python speedtest.py --help
 ---
-
+```
 ## ⚡ Quick Start
 
 ### After Installation
