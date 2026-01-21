@@ -13,10 +13,17 @@ import requests
 import asyncio
 import websockets
 import time
+import random
+import re
+import uuid
+import hashlib
+import threading
+import concurrent.futures
 from typing import Optional, List
 from pathlib import Path
 from datetime import datetime, timedelta
 from colorama import Fore, Style, init
+from tqdm import tqdm
 
 # Initialize colorama for cross-platform colored output
 init(autoreset=True)
@@ -1178,6 +1185,445 @@ class ServerSelectionUI:
             raise  # Re-raise to be caught by the menu handler
 
 
+class DownloadTest:
+    """Handle download speed test with concurrent ping monitoring"""
+    
+    @staticmethod
+    async def concurrent_ping_monitor(server: dict, duration: float, ping_queue: asyncio.Queue = None) -> List[float]:
+        """Run continuous ping test during download
+        
+        Args:
+            server: Server dictionary with 'host' key
+            duration: How long to monitor pings (seconds)
+            ping_queue: Optional asyncio.Queue to share pings in real-time
+            
+        Returns:
+            List of ping times in milliseconds
+        """
+        ping_times = []
+        
+        try:
+            host = server.get('host')
+            if not host:
+                return ping_times
+            
+            ws_url = f"wss://{host}/ws?"
+            
+            try:
+                async with websockets.connect(ws_url, ping_interval=None) as websocket:
+                    start_time = time.time()
+                    ping_count = 0
+                    
+                    while time.time() - start_time < duration:
+                        try:
+                            # Send PING with timestamp
+                            ping_timestamp = int(time.time() * 1000)
+                            ping_message = f"PING {ping_timestamp}\t{ping_count}\t"
+                            
+                            send_time = time.time()
+                            await asyncio.wait_for(websocket.send(ping_message), timeout=2.0)
+                            
+                            # Wait for PONG response
+                            pong_message = await asyncio.wait_for(websocket.recv(), timeout=2.0)
+                            
+                            receive_time = time.time()
+                            
+                            # Calculate latency in milliseconds
+                            latency_ms = (receive_time - send_time) * 1000
+                            ping_times.append(latency_ms)
+                            ping_count += 1
+                            
+                            # Share ping in real-time via queue
+                            if ping_queue:
+                                await ping_queue.put(latency_ms)
+                            
+                            # Small delay between pings
+                            await asyncio.sleep(0.2)
+                        
+                        except (asyncio.TimeoutError, Exception):
+                            # Continue monitoring even if a ping fails
+                            ping_count += 1
+                            await asyncio.sleep(0.2)
+                
+            except (websockets.exceptions.WebSocketException, OSError):
+                pass
+            
+        except Exception:
+            pass
+        
+        print(f"DEBUG: Ping monitor finished with {len(ping_times)} pings")
+        return ping_times
+    
+    @staticmethod
+    def time_based_download(url: str, test_duration: int, pbar: tqdm = None) -> tuple:
+        """Download data for a fixed time period with speed tracking
+        
+        Args:
+            url: Download URL
+            test_duration: How long to download in seconds
+            pbar: Progress bar object to update
+            
+        Returns:
+            Tuple of (total_bytes, speed_samples) where speed_samples are instantaneous speeds
+        """
+        bytes_downloaded = 0
+        start_time = time.time()
+        speed_samples = []
+        last_update_time = start_time
+        last_update_bytes = 0
+        
+        try:
+            response = requests.get(url, stream=True, timeout=60, allow_redirects=True)
+            
+            if response.status_code == 200:
+                for chunk in response.iter_content(chunk_size=10240):
+                    if chunk:
+                        bytes_downloaded += len(chunk)
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        
+                        # Calculate instantaneous speed every 0.1 seconds
+                        time_since_last = current_time - last_update_time
+                        if time_since_last >= 0.1:
+                            bytes_delta = bytes_downloaded - last_update_bytes
+                            instant_speed_mbps = (bytes_delta * 8) / (time_since_last * 1_000_000)
+                            if instant_speed_mbps > 0:
+                                speed_samples.append(instant_speed_mbps)
+                            
+                            last_update_time = current_time
+                            last_update_bytes = bytes_downloaded
+                        
+                        if pbar:
+                            pbar.update(len(chunk))
+                        
+                        # Check if test duration exceeded
+                        if elapsed >= test_duration:
+                            break
+        
+        except Exception as e:
+            pass
+        
+        return bytes_downloaded, speed_samples
+    
+    @staticmethod
+    def is_speed_stable(speed_samples: List[float], threshold: float = 3.0, min_samples: int = 5) -> bool:
+        """Check if speed has stabilized using coefficient of variation
+        
+        Args:
+            speed_samples: List of speed measurements in Mbps
+            threshold: Coefficient of variation threshold (3% = 0.03)
+            min_samples: Minimum samples needed to determine stability
+            
+        Returns:
+            True if speed is stable, False otherwise
+        """
+        if len(speed_samples) < min_samples:
+            return False
+        
+        # Use last N samples to check recent stability
+        recent_samples = speed_samples[-min_samples:]
+        
+        # Calculate mean and standard deviation
+        mean_speed = sum(recent_samples) / len(recent_samples)
+        
+        if mean_speed == 0:
+            return False
+        
+        # Calculate coefficient of variation (CV = std_dev / mean)
+        variance = sum((x - mean_speed) ** 2 for x in recent_samples) / len(recent_samples)
+        std_dev = variance ** 0.5
+        cv = std_dev / mean_speed
+        
+        # Stable if CV is low (less than 10% variation)
+        return cv < 0.10
+    
+    @staticmethod
+    async def run_download_test(server: dict, state: State, initial_duration: int = 10, 
+                               num_connections: int = 1, max_duration: int = 30) -> dict:
+        """Run adaptive download speed test with stability detection
+        
+        Strategy:
+        - Start with initial_duration (10s) minimum to get stable readings
+        - Continuously monitor speed samples
+        - When speed stabilizes (CV < 10%), can stop early
+        - Use multiple connections to stabilize network
+        - Never exceed max_duration (30s)
+        - Calculate final speed using overall bytes/time for accuracy
+        
+        Args:
+            server: Server dictionary with host, id, etc.
+            state: Application state
+            initial_duration: Initial probe duration in seconds
+            num_connections: Number of parallel connections
+            max_duration: Maximum test duration in seconds
+            
+        Returns:
+            Dictionary with download statistics
+        """
+        try:
+            host = server.get('host', '')
+            
+            if not host:
+                return {
+                    'speed': 0,
+                    'bytes': 0,
+                    'duration': 0,
+                    'latency': {},
+                    'error': 'No host available'
+                }
+            
+            # Generate cache buster
+            cache_buster = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
+            
+            # Construct download URL
+            download_url = f"https://{host}/download?nocache={cache_buster}&size=250000000"
+            
+            print(f"Downloading from: {host}")
+            print(f"Connections: {num_connections}")
+            print(f"Mode: Adaptive - will stop when speed stabilizes")
+            print()
+            
+            # Start concurrent ping monitor with shared queue
+            ping_queue = asyncio.Queue()
+            monitor_task = asyncio.create_task(DownloadTest.concurrent_ping_monitor(server, max_duration + 2, ping_queue))
+            
+            total_bytes = 0
+            all_speed_samples = []
+            
+            # Unified download logic for both single and multi-connection
+            if num_connections == 1:
+                print("Starting download (single connection)...")
+                desc = "Download"
+            else:
+                print(f"Starting {num_connections} parallel downloads...")
+                desc = "Downloading"
+            
+            progress_data = {
+                'bytes': 0,
+                'speed_samples': [],
+                'stop': False,
+                'active_connections': num_connections,
+                'connection_status': {i: True for i in range(num_connections)}
+            }
+            progress_lock = threading.Lock()
+            
+            def download_worker(conn_id):
+                """Download from a connection with health tracking"""
+                bytes_dl = 0
+                local_samples = []
+                start = time.time()
+                last_update = start
+                last_bytes = 0
+                
+                try:
+                    response = requests.get(download_url, stream=True, timeout=60, allow_redirects=True)
+                    
+                    if response.status_code == 200:
+                        while not progress_data['stop'] and time.time() - start < max_duration:
+                            try:
+                                chunk_data = response.raw.read(10240)
+                                if not chunk_data:
+                                    # Connection ended early - mark as unhealthy
+                                    if num_connections > 1:
+                                        with progress_lock:
+                                            progress_data['connection_status'][conn_id] = False
+                                            progress_data['stop'] = True
+                                    break
+                                
+                                bytes_dl += len(chunk_data)
+                                current_time = time.time()
+                                
+                                # Calculate instantaneous speed every 0.1 seconds
+                                time_delta = current_time - last_update
+                                if time_delta >= 0.1:
+                                    bytes_delta = bytes_dl - last_bytes
+                                    instant_speed = (bytes_delta * 8) / (time_delta * 1_000_000)
+                                    if instant_speed > 0:
+                                        local_samples.append(instant_speed)
+                                    
+                                    with progress_lock:
+                                        progress_data['bytes'] += bytes_delta
+                                        progress_data['speed_samples'].extend(local_samples[-1:])
+                                    
+                                    last_update = current_time
+                                    last_bytes = bytes_dl
+                            
+                            except Exception:
+                                # Connection error - mark as unhealthy
+                                if num_connections > 1:
+                                    with progress_lock:
+                                        progress_data['connection_status'][conn_id] = False
+                                        progress_data['stop'] = True
+                                break
+                    else:
+                        # Bad status code
+                        if num_connections > 1:
+                            with progress_lock:
+                                progress_data['connection_status'][conn_id] = False
+                                progress_data['stop'] = True
+                
+                except Exception:
+                    # Connection failed
+                    if num_connections > 1:
+                        with progress_lock:
+                            progress_data['connection_status'][conn_id] = False
+                            progress_data['stop'] = True
+                
+                return bytes_dl, local_samples
+            
+            start_time = time.time()
+            skip_duration = 3  # Skip first 3 seconds (connection ramp-up)
+            
+            with tqdm(unit='B', unit_scale=True, desc=desc, bar_format='{desc}: {n_fmt} bytes, Speed: {rate_fmt}') as pbar:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=num_connections) as executor:
+                    futures = [executor.submit(download_worker, i) for i in range(num_connections)]
+                    
+                    last_bytes = 0
+                    
+                    while any(not f.done() for f in futures):
+                        with progress_lock:
+                            current_bytes = progress_data['bytes']
+                            current_samples = progress_data['speed_samples'].copy()
+                            all_healthy = all(progress_data['connection_status'].values())
+                        
+                        if current_bytes > last_bytes:
+                            pbar.update(current_bytes - last_bytes)
+                            last_bytes = current_bytes
+                        
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        
+                        # Check connection health (only for multi-connection)
+                        if num_connections > 1 and not all_healthy:
+                            with progress_lock:
+                                progress_data['stop'] = True
+                            break
+                        
+                        # Check max duration
+                        if elapsed >= max_duration:
+                            with progress_lock:
+                                progress_data['stop'] = True
+                            break
+                        
+                        # Use asyncio.sleep to allow event loop to run
+                        await asyncio.sleep(0.1)
+                    
+                    # Final update
+                    with progress_lock:
+                        final_bytes = progress_data['bytes']
+                        all_speed_samples = progress_data['speed_samples'].copy()
+                        progress_data['stop'] = True
+                    
+                    if final_bytes > last_bytes:
+                        pbar.update(final_bytes - last_bytes)
+                    
+                    # Collect all results
+                    for future in futures:
+                        try:
+                            conn_bytes, conn_samples = future.result(timeout=1)
+                            total_bytes += conn_bytes
+                        except Exception:
+                            pass
+            
+            # Remove first 3 seconds of samples (connection ramp-up)
+            filtered_samples = [s for i, s in enumerate(all_speed_samples) if i >= skip_duration]
+            all_speed_samples = filtered_samples if filtered_samples else all_speed_samples
+            
+            total_duration = time.time() - start_time - 0.5 # 0.5 second buffer
+            
+            # Wait for ping monitoring to complete
+            ping_times = []
+            
+            try:
+                # First, collect any pings already in the queue
+                while not ping_queue.empty():
+                    try:
+                        ping = ping_queue.get_nowait()
+                        ping_times.append(ping)
+                    except asyncio.QueueEmpty:
+                        break
+                
+                # Wait a bit for any remaining pings
+                wait_start = time.time()
+                while time.time() - wait_start < 1.0:
+                    try:
+                        ping = ping_queue.get_nowait()
+                        ping_times.append(ping)
+                    except asyncio.QueueEmpty:
+                        await asyncio.sleep(0.05)
+                
+            except Exception:
+                pass
+            
+            # Cancel the monitor task since we got what we need
+            if not monitor_task.done():
+                monitor_task.cancel()
+            
+            # Calculate final speed using overall bytes/time method
+            overall_speed = (total_bytes * 8) / (total_duration * 1_000_000) if total_duration > 0 else 0
+            speed_mbps = overall_speed
+            
+            # Calculate latency statistics
+            latency_stats = {}
+            if ping_times and ping_times != [0]:
+                latency_stats = {
+                    'min': min(ping_times),
+                    'max': max(ping_times),
+                    'avg': sum(ping_times) / len(ping_times),
+                    'median': sorted(ping_times)[len(ping_times) // 2],
+                    'count': len(ping_times)
+                }
+            
+            print()
+            print(f"✓ Download Complete!")
+            print(f"  Speed: {speed_mbps:.2f} Mbps")
+            print(f"  Duration: {total_duration:.2f}s")
+            print(f"  Downloaded: {total_bytes / (1024*1024):.2f} MB")
+            
+            # Wait for latency stats if not available
+            if not latency_stats and not monitor_task.done():
+                retry_count = 0
+                while not latency_stats and retry_count < 5 and not monitor_task.done():
+                    try:
+                        await asyncio.sleep(0.1)
+                        if monitor_task.done():
+                            ping_times = monitor_task.result()
+                            if ping_times:
+                                latency_stats = {
+                                    'min': min(ping_times),
+                                    'max': max(ping_times),
+                                    'avg': sum(ping_times) / len(ping_times),
+                                    'median': sorted(ping_times)[len(ping_times) // 2],
+                                    'count': len(ping_times)
+                                }
+                            break
+                        retry_count += 1
+                    except Exception:
+                        break
+            
+            if latency_stats:
+                print(f"  Avg Ping: {latency_stats['avg']:.2f} ms")
+            
+            return {
+                'speed': speed_mbps,
+                'bytes': total_bytes,
+                'duration': total_duration,
+                'latency': latency_stats,
+                'samples': len(ping_times),
+                'speed_samples_count': len(all_speed_samples)
+            }
+        
+        except Exception as e:
+            print(f"✗ Download test error: {str(e)}")
+            return {
+                'speed': 0,
+                'bytes': 0,
+                'duration': 0,
+                'latency': {},
+                'error': str(e)
+            }
+
+
 class PingTest:
     """Handle WebSocket ping test for latency measurement"""
     
@@ -1429,9 +1875,62 @@ class SpeedTest:
             
             print()
             
-            print("STEP 2: DOWNLOAD TEST - Demo")
+            # Download Test
+            print("STEP 2: DOWNLOAD TEST")
             print("-" * 50)
-            print("(To be implemented)")
+            print("Measuring download speed...\n")
+            
+            download_stats = {}
+            download_latency = {}
+            
+            if server:
+                try:
+                    # Determine number of connections based on speedtest mode
+                    num_connections = 4 if state and state.speedtest_mode == "multiple" else 1
+                    
+                    # Run adaptive download test with dynamic duration
+                    download_result = asyncio.run(DownloadTest.run_download_test(
+                        server, 
+                        state, 
+                        initial_duration=10,  # Minimum 10 seconds for accurate reading
+                        num_connections=num_connections,
+                        max_duration=30  # Never exceed 30 seconds
+                    ))
+                    
+                    if download_result and 'error' not in download_result:
+                        download_stats = {
+                            'speed': download_result['speed'],
+                            'bytes': download_result['bytes'],
+                            'duration': download_result['duration'],
+                            'samples': download_result.get('samples', 0)
+                        }
+                        download_latency = download_result.get('latency', {})
+                    else:
+                        print("✗ Download test failed")
+                        download_stats = {
+                            'speed': 0,
+                            'bytes': 0,
+                            'duration': 0,
+                            'samples': 0
+                        }
+                
+                except Exception as e:
+                    print(f"✗ Error during download test: {str(e)}")
+                    download_stats = {
+                        'speed': 0,
+                        'bytes': 0,
+                        'duration': 0,
+                        'samples': 0
+                    }
+            else:
+                # No server available
+                download_stats = {
+                    'speed': 0,
+                    'bytes': 0,
+                    'duration': 0,
+                    'samples': 0
+                }
+            
             print()
             
             print("STEP 3: UPLOAD TEST - Demo")
@@ -1441,12 +1940,17 @@ class SpeedTest:
             
             input("Press Enter to continue...")
             
-            # Placeholder result
+            # Build result with all test data
             return {
-                "ping": ping_stats['avg'],
-                "download": 95.2,
-                "upload": 45.8,
-                "server": "Test Server"
+                "ping": ping_stats.get('avg', 0),
+                "download": download_stats.get('speed', 0),
+                "upload": 0,
+                "server": server.get('name', 'Unknown') if server else "N/A",
+                "download_latency": download_latency,
+                "download_speeds": {
+                    "combined": download_stats.get('speed', 0),
+                    "average": download_stats.get('speed', 0)
+                }
             }
         except KeyboardInterrupt:
             raise  # Re-raise to be caught by the menu handler
@@ -1484,9 +1988,6 @@ class SpeedTest:
            
             
             # Generate a unique share link (placeholder implementation)
-            import hashlib
-            from datetime import datetime
-            
             test_data = f"{result['ping']}{result['download']}{result['upload']}{datetime.now()}"
             share_id = hashlib.md5(test_data.encode()).hexdigest()[:8].upper()
             share_link = f"https://speedtest.example.com/results/{share_id}"
