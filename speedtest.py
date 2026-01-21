@@ -2598,6 +2598,41 @@ class Application:
 
 def main():
     """Entry point of the application"""
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Advanced Speedtest CLI', add_help=False)
+    parser.add_argument('--q', action='store_true', help='Quick run - run speedtest with default values')
+    args, unknown = parser.parse_known_args()
+    
+    # If --q flag is present, run quick speedtest
+    if args.q:
+        Display.clear_screen()
+        Display.print_banner(Config.BANNER)
+        print("=" * 50)
+        print("Quick Speedtest Mode - Anonymous User")
+        print("=" * 50)
+        print()
+        
+        state = State()
+        # Use anonymous user
+        state.login("anonymous_user")
+        # Auto-pick server
+        state.set_server(None)
+        # Run speedtest with default settings
+        result = SpeedTest.run_test(state)
+        
+        # Display results
+        Display.print_header()
+        print("SPEED TEST RESULTS")
+        print("=" * 50)
+        print(f"✓ Test Complete!")
+        print(f"  Ping: {result['ping']:.2f} ms")
+        print(f"  Download: {result['download']:.2f} Mbps")
+        print(f"  Upload: {result['upload']:.2f} Mbps")
+        print("=" * 50)
+        sys.exit(0)
+    
     app = Application()
     try:
         app.run()
