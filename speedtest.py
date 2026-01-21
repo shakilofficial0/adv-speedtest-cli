@@ -760,6 +760,7 @@ class State:
         self.is_logged_in = False
         self.current_user = None
         self.selected_server = None  # Store full server dict
+        self.speedtest_mode = "multiple"  # 'multiple' or 'single'
     
     def login(self, username: str):
         """Set user as logged in"""
@@ -847,6 +848,10 @@ class Display:
         menu_number += 1
         
         menu_items.append((menu_number, "Run SpeedTest and Share"))
+        menu_number += 1
+        
+        # Settings option
+        menu_items.append((menu_number, "Settings"))
         menu_number += 1
         
         # Logout option (only if logged in)
@@ -1223,6 +1228,80 @@ class SpeedTest:
             raise  # Re-raise to be caught by the menu handler
 
 
+class SettingsManager:
+    """Handle application settings"""
+    
+    @staticmethod
+    def show_settings(state: State) -> None:
+        """Display and handle settings menu"""
+        while True:
+            try:
+                Display.print_header()
+                print("SETTINGS")
+                print("=" * 50)
+                print("(Press Ctrl+C to go back to main menu)")
+                print("=" * 50)
+                print()
+                
+                # Display current speedtest mode
+                mode_display = "Multiple Connection" if state.speedtest_mode == "multiple" else "Single Connection"
+                colored_mode = f"{Fore.GREEN}{mode_display}{Style.RESET_ALL}" if state.speedtest_mode == "multiple" else mode_display
+                
+                print("1. Select Speedtest Mode (Current: {})".format(colored_mode))
+                print("=" * 50)
+                print()
+                
+                choice = input("Select option (1 to continue, 0 to go back): ").strip()
+                
+                if choice == "0":
+                    return
+                elif choice == "1":
+                    SettingsManager.select_speedtest_mode(state)
+                else:
+                    print("✗ Invalid selection")
+                    input("Press Enter to continue...")
+            
+            except KeyboardInterrupt:
+                raise
+    
+    @staticmethod
+    def select_speedtest_mode(state: State) -> None:
+        """Select speedtest connection mode"""
+        try:
+            Display.print_header()
+            print("SELECT SPEEDTEST MODE")
+            print("=" * 50)
+            print("(Press Ctrl+C to go back to settings)")
+            print("=" * 50)
+            print()
+            
+            # Display options with color coding
+            multiple_color = f"{Fore.GREEN}(Default){Style.RESET_ALL}" if state.speedtest_mode == "multiple" else ""
+            single_color = f"{Fore.GREEN}(Current){Style.RESET_ALL}" if state.speedtest_mode == "single" else ""
+            
+            print("1. Multiple Connection {}".format(multiple_color))
+            print("2. Single Connection {}".format(single_color))
+            print("=" * 50)
+            print()
+            
+            choice = input("Select option: ").strip()
+            
+            if choice == "1":
+                state.speedtest_mode = "multiple"
+                print(f"\n✓ Speedtest mode set to: {Fore.GREEN}Multiple Connection{Style.RESET_ALL}")
+                input("Press Enter to continue...")
+            elif choice == "2":
+                state.speedtest_mode = "single"
+                print(f"\n✓ Speedtest mode set to: Single Connection")
+                input("Press Enter to continue...")
+            else:
+                print("✗ Invalid selection")
+                input("Press Enter to continue...")
+        
+        except KeyboardInterrupt:
+            raise
+
+
 class MenuHandler:
     """Handle menu navigation and selection"""
     
@@ -1296,6 +1375,10 @@ class MenuHandler:
                 print(f"  Upload: {result['upload']} Mbps")
                 print("=" * 50)
                 input("Press Enter to continue...")
+                return True
+            
+            elif "Settings" in action:
+                SettingsManager.show_settings(self.state)
                 return True
             
             elif "Logout" in action:
