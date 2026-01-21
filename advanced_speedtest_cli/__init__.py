@@ -5,7 +5,7 @@ A sophisticated command-line tool for measuring internet speed with precision.
 Engineered for accuracy, optimized for performance, and designed for modern networks.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "Shakil Ahmed"
 __email__ = "shakilofficial0@gmail.com"
 __license__ = "MIT"
