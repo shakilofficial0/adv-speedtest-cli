@@ -117,6 +117,66 @@ class CookieManager:
             return None
     
     @staticmethod
+    def save_user_data(email: str, user_data: dict) -> None:
+        """Save user profile data to cache
+        
+        Args:
+            email: User email
+            user_data: User profile data from window.OOKLA.globals
+        """
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if cookies_file.exists():
+                with open(cookies_file, 'r') as f:
+                    all_data = json.load(f)
+            else:
+                all_data = {}
+            
+            if email not in all_data:
+                all_data[email] = {}
+            
+            user_entry = all_data[email]
+            if isinstance(user_entry, dict):
+                user_entry['user_data'] = user_data
+                user_entry['user_data_saved_at'] = datetime.now().isoformat()
+            
+            with open(cookies_file, 'w') as f:
+                json.dump(all_data, f, indent=2)
+        
+        except Exception as e:
+            print(f"✗ Error saving user data: {str(e)}")
+    
+    @staticmethod
+    def load_user_data(email: str) -> Optional[dict]:
+        """Load user profile data from cache
+        
+        Args:
+            email: User email
+            
+        Returns:
+            User profile data dict or None if not found
+        """
+        cookies_file = Config.get_cookies_file_path()
+        
+        try:
+            if not cookies_file.exists():
+                return None
+            
+            with open(cookies_file, 'r') as f:
+                all_data = json.load(f)
+            
+            user_entry = all_data.get(email)
+            if user_entry and isinstance(user_entry, dict):
+                return user_entry.get('user_data')
+            
+            return None
+        
+        except Exception as e:
+            print(f"✗ Error loading user data: {str(e)}")
+            return None
+    
+    @staticmethod
     def is_cookie_expired(email: str) -> bool:
         """Check if stored cookies have expired"""
         cookies_file = Config.get_cookies_file_path()
@@ -246,7 +306,7 @@ class LoginManager:
     
     @staticmethod
     def verify_cached_login(email: str) -> bool:
-        """Verify if cached login is still valid"""
+        """Verify if cached login is still valid and fetch user details"""
         cookies = CookieManager.load_cookies(email)
         
         if not cookies:
@@ -268,7 +328,12 @@ class LoginManager:
             )
             
             # If cookies are valid and user is authenticated, we should get a redirect or success
-            return response.status_code in [200, 302]
+            if response.status_code in [200, 302]:
+                # Fetch user details for cached login
+                user_data = LoginManager.fetch_user_details(email)
+                return user_data is not None
+            
+            return False
         
         except requests.exceptions.RequestException:
             return False
@@ -338,6 +403,12 @@ class LoginManager:
                 
                 CookieManager.save_cookies(email, all_cookies, expiration)
                 print(f"✓ Login successful!")
+                
+                # Fetch user details from speedtest homepage
+                user_data = LoginManager.fetch_user_details(email)
+                if user_data:
+                    print(f"✓ User data cached: {user_data.get('userName', 'Unknown')}")
+                
                 return email
             # Status 200 means failed login
             elif response.status_code == 200:
@@ -349,6 +420,73 @@ class LoginManager:
         
         except requests.exceptions.RequestException as e:
             print(f"✗ Login failed: {str(e)}")
+            return None
+        except KeyboardInterrupt:
+            raise
+    
+    @staticmethod
+    def fetch_user_details(email: str) -> Optional[dict]:
+        """Fetch user details from https://www.speedtest.net/
+        
+        Extracts window.OOKLA.globals data from the page HTML.
+        Returns the user data if logged in, None otherwise.
+        """
+        try:
+            cookies = CookieManager.load_cookies(email)
+            
+            if not cookies:
+                print("✗ No cookies found for user")
+                return None
+            
+            print("Fetching user details...")
+            headers = {
+                'User-Agent': LoginManager.USER_AGENT,
+                'Referer': 'https://www.speedtest.net/'
+            }
+            
+            response = requests.get(
+                'https://www.speedtest.net/',
+                headers=headers,
+                cookies=cookies,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                print(f"✗ Failed to fetch user details (Status: {response.status_code})")
+                return None
+            
+            # Extract window.OOKLA.globals from HTML
+            html_content = response.text
+            
+            # Find the script tag containing window.OOKLA.globals
+            import re
+            pattern = r'window\.OOKLA\.globals\s*=\s*({.*?});\s*window\.OOKLA\.isBlocked'
+            match = re.search(pattern, html_content, re.DOTALL)
+            
+            if not match:
+                print("✗ Could not find user data in page")
+                return None
+            
+            try:
+                globals_json_str = match.group(1)
+                user_data = json.loads(globals_json_str)
+                
+                # Check if user is logged in
+                if user_data.get('userName'):
+                    print(f"✓ User details fetched for {user_data.get('userName')}")
+                    # Save user data to cache
+                    CookieManager.save_user_data(email, user_data)
+                    return user_data
+                else:
+                    print("✗ User not logged in")
+                    return None
+            
+            except json.JSONDecodeError as e:
+                print(f"✗ Failed to parse user data: {str(e)}")
+                return None
+        
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Error fetching user details: {str(e)}")
             return None
         except KeyboardInterrupt:
             raise
