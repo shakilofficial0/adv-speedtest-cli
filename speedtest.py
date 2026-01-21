@@ -771,6 +771,7 @@ class State:
         self.current_user = None
         self.selected_server = None  # Store full server dict
         self.speedtest_mode = "multiple"  # 'multiple' or 'single'
+        self.parallel_connections = 8  # Default number of parallel connections
     
     def login(self, username: str):
         """Set user as logged in"""
@@ -1251,7 +1252,7 @@ class DownloadTest:
         except Exception:
             pass
         
-        print(f"DEBUG: Ping monitor finished with {len(ping_times)} pings")
+        
         return ping_times
     
     @staticmethod
@@ -1379,8 +1380,6 @@ class DownloadTest:
             download_url = f"https://{host}/download?nocache={cache_buster}&size=250000000"
             
             print(f"Downloading from: {host}")
-            print(f"Connections: {num_connections}")
-            print(f"Mode: Adaptive - will stop when speed stabilizes")
             print()
             
             # Start concurrent ping monitor with shared queue
@@ -1529,7 +1528,7 @@ class DownloadTest:
             filtered_samples = [s for i, s in enumerate(all_speed_samples) if i >= skip_duration]
             all_speed_samples = filtered_samples if filtered_samples else all_speed_samples
             
-            total_duration = time.time() - start_time - 0.5 # 0.5 second buffer
+            total_duration = time.time() - start_time - 0.5  # 0.5 second buffer for connection cleanup
             
             # Wait for ping monitoring to complete
             ping_times = []
@@ -1602,7 +1601,7 @@ class DownloadTest:
                         break
             
             if latency_stats:
-                print(f"  Avg Ping: {latency_stats['avg']:.2f} ms")
+                print(f"  Avg Ping: {PingTest.get_ping_color(latency_stats['avg'])}")
             
             return {
                 'speed': speed_mbps,
@@ -1622,6 +1621,284 @@ class DownloadTest:
                 'latency': {},
                 'error': str(e)
             }
+    
+    @staticmethod
+    async def run_upload_test(server: dict, state: State, test_duration: int = 15, 
+                              num_connections: int = 1) -> dict:
+        """Run time-based upload speed test
+        
+        Strategy:
+        - Upload for fixed 15 seconds total
+        - Skip first 3 seconds (connection ramp-up)
+        - Measure speed only from second 3-12
+        - Stop immediately at 12 seconds, close all connections
+        - Calculate speed using bytes collected in the 3-12 second window
+        
+        Args:
+            server: Server dictionary with host, id, etc.
+            state: Application state
+            test_duration: Total test duration in seconds (15s)
+            num_connections: Number of parallel connections
+            
+        Returns:
+            Dictionary with upload statistics
+        """
+        try:
+            host = server.get('host', '')
+            
+            if not host:
+                return {
+                    'speed': 0,
+                    'bytes': 0,
+                    'duration': 0,
+                    'latency': {},
+                    'error': 'No host available'
+                }
+            
+            # Generate cache buster
+            cache_buster = hashlib.md5(str(time.time()).encode()).hexdigest()
+            
+            # Construct upload URL
+            upload_url = f"https://{host}/upload?nocache={cache_buster}"
+            
+            print(f"Uploading to: {host}")
+            print()
+            
+            # Start concurrent ping monitor with shared queue
+            ping_queue = asyncio.Queue()
+            monitor_task = asyncio.create_task(DownloadTest.concurrent_ping_monitor(server, test_duration + 2, ping_queue))
+            
+            total_bytes = 0
+            all_speed_samples = []
+            
+            # Generate unlimited random data (will stop at 12 seconds)
+            chunk_size = 10240  # 10KB chunks
+            
+            # Unified upload logic for both single and multi-connection
+            if num_connections == 1:
+                print("Starting upload (single connection)...")
+                desc = "Upload"
+            else:
+                print(f"Starting {num_connections} parallel uploads...")
+                desc = "Uploading"
+            
+            progress_data = {
+                'bytes': 0,
+                'speed_samples': [],
+                'stop': False,
+                'start_time': time.time(),
+                'measurement_start': 3,  # Start measuring at 3 seconds
+                'measurement_end': 12,   # Stop measuring at 12 seconds
+                'active_connections': num_connections,
+                'connection_status': {i: True for i in range(num_connections)}
+            }
+            progress_lock = threading.Lock()
+            
+            def upload_worker(conn_id):
+                """Upload random data for fixed duration"""
+                response = None
+                
+                try:
+                    # Create a file-like object that tracks upload progress
+                    class ProgressTracker:
+                        def __init__(self, lock, progress_data, test_duration, conn_id):
+                            self.chunk_size = 10240
+                            self.bytes_sent = 0
+                            self.lock = lock
+                            self.progress_data = progress_data
+                            self.test_duration = test_duration
+                            self.conn_id = conn_id
+                            self.last_update = time.time()
+                            self.last_bytes = 0
+                            self.base_time = progress_data['start_time']
+                        
+                        def read(self, size=-1):
+                            current_time = time.time()
+                            elapsed = current_time - self.base_time
+                            
+                            # Stop at 12 seconds - measurement end time
+                            if elapsed >= self.progress_data['measurement_end']:
+                                return b''
+                            
+                            # Check stop signal
+                            if self.progress_data['stop']:
+                                return b''
+                            
+                            # Generate random data chunk
+                            data = os.urandom(self.chunk_size)
+                            self.bytes_sent += len(data)
+                            
+                            # Update speed samples only during measurement window (3-12 seconds)
+                            time_delta = current_time - self.last_update
+                            
+                            if time_delta >= 0.1:
+                                bytes_delta = self.bytes_sent - self.last_bytes
+                                instant_speed = (bytes_delta * 8) / (time_delta * 1_000_000)
+                                
+                                with self.lock:
+                                    # Only update shared pool and samples during measurement window
+                                    if elapsed >= self.progress_data['measurement_start'] and elapsed < self.progress_data['measurement_end']:
+                                        self.progress_data['bytes'] += bytes_delta
+                                        if instant_speed > 0:
+                                            self.progress_data['speed_samples'].append(instant_speed)
+                                
+                                self.last_update = current_time
+                                self.last_bytes = self.bytes_sent
+                            
+                            return data
+                        
+                        def __len__(self):
+                            return 0xFFFFFFFF  # Unlimited size
+                    
+                    # Create progress tracker
+                    tracker = ProgressTracker(progress_lock, progress_data, test_duration, conn_id)
+                    
+                    # Use a session with shorter timeout
+                    session = requests.Session()
+                    
+                    try:
+                        response = session.post(
+                            upload_url,
+                            data=tracker,
+                            timeout=5,
+                            allow_redirects=True,
+                            stream=False
+                        )
+                    
+                    except requests.exceptions.Timeout:
+                        # Expected when we stop sending data - ignore
+                        pass
+                    
+                    except Exception:
+                        # Connection error - ignore
+                        pass
+                    
+                    finally:
+                        # Close the session immediately
+                        session.close()
+                
+                except Exception:
+                    pass
+                
+                return progress_data['bytes'], []
+            
+            start_time = time.time()
+            
+            with tqdm(unit='B', unit_scale=True, desc=desc, bar_format='{desc}: {n_fmt} bytes, Speed: {rate_fmt}') as pbar:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=num_connections) as executor:
+                    futures = [executor.submit(upload_worker, i) for i in range(num_connections)]
+                    
+                    last_bytes = 0
+                    
+                    # Monitor for test_duration + 2 seconds
+                    while time.time() - start_time < test_duration + 2:
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        
+                        with progress_lock:
+                            current_bytes = progress_data['bytes']
+                        
+                        if current_bytes > last_bytes:
+                            pbar.update(current_bytes - last_bytes)
+                            last_bytes = current_bytes
+                        
+                        # Check if we've reached measurement end time (12 seconds)
+                        if elapsed >= 12:  # measurement_end time
+                            with progress_lock:
+                                progress_data['stop'] = True
+                            break
+                        
+                        await asyncio.sleep(0.1)
+                    
+                    # Signal all workers to stop
+                    with progress_lock:
+                        progress_data['stop'] = True
+                    
+                    # Final update
+                    with progress_lock:
+                        final_bytes = progress_data['bytes']
+                        all_speed_samples = progress_data['speed_samples'].copy()
+                    
+                    if final_bytes > last_bytes:
+                        pbar.update(final_bytes - last_bytes)
+                    
+                    total_bytes = final_bytes
+            
+            # Measurement window is 3-12 seconds = 9 seconds
+            # Speed = bytes_in_window / 9_seconds
+            measurement_window = 9  # 12 - 3 seconds
+            
+            total_duration = measurement_window
+            
+            # Wait for ping monitoring to complete
+            ping_times = []
+            
+            try:
+                # First, collect any pings already in the queue
+                while not ping_queue.empty():
+                    try:
+                        ping = ping_queue.get_nowait()
+                        ping_times.append(ping)
+                    except asyncio.QueueEmpty:
+                        break
+                
+                # Wait a bit for any remaining pings
+                wait_start = time.time()
+                while time.time() - wait_start < 1.0:
+                    try:
+                        ping = ping_queue.get_nowait()
+                        ping_times.append(ping)
+                    except asyncio.QueueEmpty:
+                        await asyncio.sleep(0.05)
+                
+            except Exception:
+                pass
+            
+            # Cancel the monitor task
+            if not monitor_task.done():
+                monitor_task.cancel()
+            
+            # Calculate speed using bytes collected in measurement window and 9 second window
+            overall_speed = (total_bytes * 8) / (total_duration * 1_000_000) if total_duration > 0 else 0
+            speed_mbps = overall_speed
+            
+            # Calculate latency statistics
+            latency_stats = {}
+            if ping_times and ping_times != [0]:
+                latency_stats = {
+                    'min': min(ping_times),
+                    'max': max(ping_times),
+                    'avg': sum(ping_times) / len(ping_times),
+                    'median': sorted(ping_times)[len(ping_times) // 2],
+                    'count': len(ping_times)
+                }
+            
+            print()
+            print(f"✓ Upload Complete!")
+            print(f"  Speed: {speed_mbps:.2f} Mbps")
+            print(f"  Uploaded: {total_bytes / (1024*1024):.2f} MB")
+            
+            if latency_stats:
+                print(f"  Avg Ping: {PingTest.get_ping_color(latency_stats['avg'])}")
+            
+            return {
+                'speed': speed_mbps,
+                'bytes': total_bytes,
+                'duration': total_duration,
+                'latency': latency_stats,
+                'samples': len(ping_times),
+                'speed_samples_count': len(all_speed_samples)
+            }
+        
+        except Exception as e:
+            print(f"✗ Upload test error: {str(e)}")
+            return {
+                'speed': 0,
+                'bytes': 0,
+                'duration': 0,
+                'latency': {},
+                'error': str(e)
+            }
 
 
 class PingTest:
@@ -1629,11 +1906,11 @@ class PingTest:
     
     @staticmethod
     async def run_ping_test(server: dict, num_pings: int = 10) -> Optional[List[float]]:
-        """Run ping test via WebSocket
+        """Run ping test via WebSocket with tqdm progress and color coding
         
         Args:
             server: Server dictionary with 'host' key
-            num_pings: Number of ping packets to send
+            num_pings: Number of ping packets to send (max 10)
             
         Returns:
             List of ping times in milliseconds, or None if failed
@@ -1648,49 +1925,60 @@ class PingTest:
             ws_url = f"wss://{host}/ws?"
             
             ping_times = []
-            pong_count = 0
-            timeout_count = 0
             
-            print(f"Connecting to {host}...")
             
             try:
                 async with websockets.connect(ws_url, ping_interval=None) as websocket:
                     print(f"✓ Connected to {host}")
-                    print(f"Sending {num_pings} ping packets...\n")
                     
-                    for i in range(num_pings):
-                        try:
-                            # Send PING with timestamp
-                            ping_timestamp = int(time.time() * 1000)
-                            ping_message = f"PING {ping_timestamp}\t{i}\t"
+                    with tqdm(total=num_pings, desc="Ping Test", unit="pings", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
+                        for i in range(num_pings):
+                            try:
+                                # Send PING with timestamp
+                                ping_timestamp = int(time.time() * 1000)
+                                ping_message = f"PING {ping_timestamp}\t{i}\t"
+                                
+                                send_time = time.time()
+                                await asyncio.wait_for(websocket.send(ping_message), timeout=5.0)
+                                
+                                # Wait for PONG response
+                                pong_message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                                
+                                receive_time = time.time()
+                                
+                                # Calculate latency in milliseconds
+                                latency_ms = (receive_time - send_time) * 1000
+                                ping_times.append(latency_ms)
+                                
+                                # Color code based on ping value
+                                if latency_ms <= 10:
+                                    color = Fore.GREEN
+                                    status = "Very Good"
+                                elif latency_ms <= 60:
+                                    color = Fore.CYAN
+                                    status = "Good"
+                                elif latency_ms <= 120:
+                                    color = Fore.YELLOW
+                                    status = "Not Good"
+                                else:
+                                    color = Fore.RED
+                                    status = "Bad"
+                                
+                                # Update progress bar
+                                pbar.update(1)
+                                pbar.set_description(f"{color}Ping Test: {latency_ms:.2f}ms ({status}){Style.RESET_ALL}")
+                                
+                                # Small delay between pings
+                                await asyncio.sleep(0.1)
                             
-                            send_time = time.time()
-                            await asyncio.wait_for(websocket.send(ping_message), timeout=5.0)
-                            
-                            # Wait for PONG response
-                            pong_message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
-                            
-                            receive_time = time.time()
-                            
-                            # Calculate latency in milliseconds
-                            latency_ms = (receive_time - send_time) * 1000
-                            ping_times.append(latency_ms)
-                            pong_count += 1
-                            
-                            # Parse PONG response for display
-                            print(f"PONG received: {latency_ms:.2f} ms")
-                            
-                            # Small delay between pings
-                            await asyncio.sleep(0.1)
-                        
-                        except asyncio.TimeoutError:
-                            print(f"✗ Timeout waiting for PONG #{i+1}")
-                            timeout_count += 1
-                        except Exception as e:
-                            print(f"✗ Error on ping #{i+1}: {str(e)}")
-                            timeout_count += 1
+                            except asyncio.TimeoutError:
+                                pbar.update(1)
+                                pbar.set_description(f"{Fore.RED}Ping Test: Timeout{Style.RESET_ALL}")
+                            except Exception as e:
+                                pbar.update(1)
+                                pbar.set_description(f"{Fore.RED}Ping Test: Error{Style.RESET_ALL}")
                     
-                    print(f"\n✓ Ping test complete: {pong_count} successful, {timeout_count} timeouts")
+                    print()
                     
             except (websockets.exceptions.WebSocketException, OSError) as e:
                 print(f"✗ WebSocket connection failed: {str(e)}")
@@ -1705,6 +1993,31 @@ class PingTest:
         except Exception as e:
             print(f"✗ Ping test error: {str(e)}")
             return None
+    
+    @staticmethod
+    def get_ping_color(ping_ms: float) -> str:
+        """Get color code based on ping value
+        
+        Args:
+            ping_ms: Ping time in milliseconds
+            
+        Returns:
+            Colored ping value string
+        """
+        if ping_ms <= 10:
+            color = Fore.GREEN
+            status = "Very Good"
+        elif ping_ms <= 60:
+            color = Fore.CYAN
+            status = "Good"
+        elif ping_ms <= 120:
+            color = Fore.YELLOW
+            status = "Not Good"
+        else:
+            color = Fore.RED
+            status = "Bad"
+        
+        return f"{color}{ping_ms:.2f} ms ({status}){Style.RESET_ALL}"
     
     @staticmethod
     def calculate_ping_stats(ping_times: List[float]) -> dict:
@@ -1853,10 +2166,10 @@ class SpeedTest:
                     if ping_times:
                         ping_stats = PingTest.calculate_ping_stats(ping_times)
                         print(f"\n✓ Ping Test Complete!")
-                        print(f"  Min: {ping_stats['min']:.2f} ms")
-                        print(f"  Max: {ping_stats['max']:.2f} ms")
-                        print(f"  Avg: {ping_stats['avg']:.2f} ms")
-                        print(f"  Median: {ping_stats['median']:.2f} ms")
+                        print(f"  Min: {PingTest.get_ping_color(ping_stats['min'])}")
+                        print(f"  Max: {PingTest.get_ping_color(ping_stats['max'])}")
+                        print(f"  Avg: {PingTest.get_ping_color(ping_stats['avg'])}")
+                        print(f"  Median: {PingTest.get_ping_color(ping_stats['median'])}")
                         print(f"  Samples: {ping_stats['count']}")
                     else:
                         print("✗ Ping test failed")
@@ -1878,15 +2191,14 @@ class SpeedTest:
             # Download Test
             print("STEP 2: DOWNLOAD TEST")
             print("-" * 50)
-            print("Measuring download speed...\n")
             
             download_stats = {}
             download_latency = {}
             
             if server:
                 try:
-                    # Determine number of connections based on speedtest mode
-                    num_connections = 4 if state and state.speedtest_mode == "multiple" else 1
+                    # Determine number of connections based on speedtest mode and user settings
+                    num_connections = state.parallel_connections if state and state.speedtest_mode == "multiple" else 1
                     
                     # Run adaptive download test with dynamic duration
                     download_result = asyncio.run(DownloadTest.run_download_test(
@@ -1933,23 +2245,81 @@ class SpeedTest:
             
             print()
             
-            print("STEP 3: UPLOAD TEST - Demo")
+            # Upload Test
+            print("STEP 3: UPLOAD TEST")
             print("-" * 50)
-            print("(To be implemented)")
+            
+            upload_stats = {}
+            upload_latency = {}
+            
+            if server:
+                try:
+                    # Determine number of connections based on speedtest mode and user settings
+                    num_connections = state.parallel_connections if state and state.speedtest_mode == "multiple" else 1
+                    
+                    # Run upload test with fixed 15 second duration, measuring 3-12 seconds
+                    upload_result = asyncio.run(DownloadTest.run_upload_test(
+                        server, 
+                        state, 
+                        test_duration=15,  # Fixed 15 second total duration
+                        num_connections=num_connections
+                    ))
+                    
+                    if upload_result and 'error' not in upload_result:
+                        upload_stats = {
+                            'speed': upload_result['speed'],
+                            'bytes': upload_result['bytes'],
+                            'duration': upload_result['duration'],
+                            'samples': upload_result.get('samples', 0)
+                        }
+                        upload_latency = upload_result.get('latency', {})
+                    else:
+                        print("✗ Upload test failed")
+                        upload_stats = {
+                            'speed': 0,
+                            'bytes': 0,
+                            'duration': 0,
+                            'samples': 0
+                        }
+                
+                except Exception as e:
+                    print(f"✗ Error during upload test: {str(e)}")
+                    upload_stats = {
+                        'speed': 0,
+                        'bytes': 0,
+                        'duration': 0,
+                        'samples': 0
+                    }
+            else:
+                # No server available
+                upload_stats = {
+                    'speed': 0,
+                    'bytes': 0,
+                    'duration': 0,
+                    'samples': 0
+                }
+            
             print()
             
-            input("Press Enter to continue...")
+            print("✓ Test Complete!")
+            print("Press Enter to see final results...")
+            input()
             
             # Build result with all test data
             return {
                 "ping": ping_stats.get('avg', 0),
                 "download": download_stats.get('speed', 0),
-                "upload": 0,
+                "upload": upload_stats.get('speed', 0),
                 "server": server.get('name', 'Unknown') if server else "N/A",
                 "download_latency": download_latency,
+                "upload_latency": upload_latency,
                 "download_speeds": {
                     "combined": download_stats.get('speed', 0),
                     "average": download_stats.get('speed', 0)
+                },
+                "upload_speeds": {
+                    "combined": upload_stats.get('speed', 0),
+                    "average": upload_stats.get('speed', 0)
                 }
             }
         except KeyboardInterrupt:
@@ -2020,15 +2390,18 @@ class SettingsManager:
                 colored_mode = f"{Fore.GREEN}{mode_display}{Style.RESET_ALL}" if state.speedtest_mode == "multiple" else mode_display
                 
                 print("1. Select Speedtest Mode (Current: {})".format(colored_mode))
+                print("2. Parallel Connections (Current: {})".format(Fore.CYAN + str(state.parallel_connections) + Style.RESET_ALL))
                 print("=" * 50)
                 print()
                 
-                choice = input("Select option (1 to continue, 0 to go back): ").strip()
+                choice = input("Select option (1-2 to continue, 0 to go back): ").strip()
                 
                 if choice == "0":
                     return
                 elif choice == "1":
                     SettingsManager.select_speedtest_mode(state)
+                elif choice == "2":
+                    SettingsManager.set_parallel_connections(state)
                 else:
                     print("✗ Invalid selection")
                     input("Press Enter to continue...")
@@ -2069,6 +2442,45 @@ class SettingsManager:
             else:
                 print("✗ Invalid selection")
                 input("Press Enter to continue...")
+        
+        except KeyboardInterrupt:
+            raise
+    
+    @staticmethod
+    def set_parallel_connections(state: State) -> None:
+        """Set number of parallel connections for multi-connection mode"""
+        try:
+            Display.print_header()
+            print("SET PARALLEL CONNECTIONS")
+            print("=" * 50)
+            print("(Press Ctrl+C to go back to settings)")
+            print("=" * 50)
+            print()
+            print(f"Current value: {Fore.CYAN}{state.parallel_connections}{Style.RESET_ALL}")
+            print(f"Default value: {Fore.GREEN}8{Style.RESET_ALL}")
+            print("Recommended: 4-16 connections")
+            print()
+            
+            while True:
+                try:
+                    user_input = input("Enter number of parallel connections (1-64): ").strip()
+                    
+                    # If empty, use default
+                    if not user_input:
+                        user_input = "8"
+                    
+                    connections = int(user_input)
+                    
+                    if 1 <= connections <= 64:
+                        state.parallel_connections = connections
+                        print(f"\n✓ Parallel connections set to: {Fore.CYAN}{connections}{Style.RESET_ALL}")
+                        input("Press Enter to continue...")
+                        return
+                    else:
+                        print("✗ Please enter a number between 1 and 64")
+                
+                except ValueError:
+                    print("✗ Invalid input. Please enter a valid number.")
         
         except KeyboardInterrupt:
             raise
@@ -2127,10 +2539,9 @@ class MenuHandler:
                 Display.print_header()
                 print("SPEED TEST RESULTS")
                 print("=" * 50)
-                print(f"✓ Test Complete!")
-                print(f"  Ping: {result['ping']} ms")
-                print(f"  Download: {result['download']} Mbps")
-                print(f"  Upload: {result['upload']} Mbps")
+                print(f"  Ping: {result['ping']:.2f} ms")
+                print(f"  Download: {result['download']:.2f} Mbps")
+                print(f"  Upload: {result['upload']:.2f} Mbps")
                 print(f"  Share Link: {result.get('share_link', 'N/A')}")
                 print("=" * 50)
                 input("Press Enter to continue...")
@@ -2141,10 +2552,9 @@ class MenuHandler:
                 Display.print_header()
                 print("SPEED TEST RESULTS")
                 print("=" * 50)
-                print(f"✓ Test Complete!")
-                print(f"  Ping: {result['ping']} ms")
-                print(f"  Download: {result['download']} Mbps")
-                print(f"  Upload: {result['upload']} Mbps")
+                print(f"  Ping: {result['ping']:.2f} ms")
+                print(f"  Download: {result['download']:.2f} Mbps")
+                print(f"  Upload: {result['upload']:.2f} Mbps")
                 print("=" * 50)
                 input("Press Enter to continue...")
                 return True
