@@ -77,13 +77,39 @@
 ### Option 1: Install from PyPI (Recommended)
 
 The easiest way - install directly from PyPI:
+
+#### Windows:
 ```bash
 pip install adv-speedtest-cli
+adv-speedtest-cli
 ```
 
-Then run:
+#### macOS & Linux (Using pipx - Recommended):
 ```bash
+# Install pipx if not already installed
+sudo apt-get install pipx          # Ubuntu/Debian
+brew install pipx                  # macOS
+
+# Install the package
+pipx install adv-speedtest-cli
+
+# Configure PATH (important!)
+pipx ensurepath
+
+# Restart terminal or run:
+source ~/.bashrc  # Linux
+# Or manually add to PATH if needed
+
+# Now use the command
 adv-speedtest-cli
+```
+
+#### Linux/macOS (Alternative - Using pip):
+```bash
+pip install adv-speedtest-cli --break-system-packages
+
+# If command not found, run as module:
+python3 -m advanced_speedtest_cli
 ```
 
 ### Option 2: Install from Source
@@ -108,13 +134,11 @@ pip install -r requirements.txt
 **Step 3: Verify Installation**
 ```bash
 python speedtest.py --help
-```
-
 ---
 
 ## ⚡ Quick Start
 
-### Using PyPI Installation
+### After Installation
 
 **Quick Mode** - Execute immediate speedtest with default settings:
 ```bash
@@ -132,6 +156,22 @@ You can also use these equivalent commands:
 ```bash
 advanced-speedtest
 speedtest-cli
+```
+
+### If Command Not Found
+
+**On Linux/macOS after pipx install:**
+```bash
+# Option 1: Restart terminal (cleanest)
+exit  # or close terminal window and reopen
+
+# Option 2: Reload PATH manually
+source ~/.bashrc     # Ubuntu/Debian
+source ~/.zprofile   # macOS with zsh
+source ~/.bash_profile  # macOS with bash
+
+# Option 3: Run as Python module (always works)
+python3 -m advanced_speedtest_cli --q
 ```
 
 ### Using Source Installation
@@ -350,6 +390,53 @@ Contributions are welcome! Please follow these guidelines:
 - 💡 **Discussions**: [GitHub Discussions](https://github.com/shakilofficial0/adv-speedtest-cli/discussions)
 
 ### Troubleshooting
+
+#### Command Not Found (Ubuntu/Debian)
+
+**Issue:** After installation, `adv-speedtest-cli` command is not found.
+
+**Solution 1: Using pipx (Recommended)**
+```bash
+# If using pip/pip3, uninstall and reinstall with pipx
+pip uninstall adv-speedtest-cli
+
+# Install pipx (if not installed)
+sudo apt-get install pipx
+
+# Install with pipx
+pipx install adv-speedtest-cli
+
+# Configure PATH (IMPORTANT!)
+pipx ensurepath
+
+# Restart terminal or reload PATH:
+source ~/.bashrc
+
+# Now use the command
+adv-speedtest-cli --q
+```
+
+**Solution 2: Run as Python module (works immediately)**
+```bash
+# If package is already installed, use as module
+python3 -m advanced_speedtest_cli
+
+# With quick mode
+python3 -m advanced_speedtest_cli --q
+
+# Create alias for convenience (add to ~/.bashrc)
+echo 'alias adv-speedtest-cli="python3 -m advanced_speedtest_cli"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Solution 3: Manual PATH configuration**
+```bash
+# Add to ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
+
+# Reload shell
+source ~/.bashrc
+```
 
 #### Connection Failed
 ```bash
