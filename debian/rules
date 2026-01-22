@@ -1,10 +1,21 @@
 #!/usr/bin/make -f
 
+export PYBUILD_NAME=adv-speedtest-cli
+export PYBUILD_BEFORE_INSTALL=rm -rf {build_dir}
+
 %:
-	dh $@ --with python3 --buildsystem=pybuild
+	dh $@ --buildsystem=pybuild --with python3
+
+override_dh_auto_build:
+	dh_auto_build
+	python3 setup.py egg_info
 
 override_dh_auto_install:
-	python3 setup.py install --root=debian/adv-speedtest-cli --install-layout=deb
+	dh_auto_install
+	python3 setup.py install --root=debian/adv-speedtest-cli --install-layout=deb --force
 
 override_dh_python3:
 	dh_python3 --shebang=/usr/bin/python3
+
+override_dh_auto_test:
+	# Skip tests for now

@@ -25,7 +25,6 @@ setup(
         "Source Code": "https://github.com/shakilofficial0/adv-speedtest-cli",
     },
     packages=find_packages(),
-    py_modules=["speedtest"],
     entry_points={
         "console_scripts": [
             "adv-speedtest-cli=speedtest:main",
