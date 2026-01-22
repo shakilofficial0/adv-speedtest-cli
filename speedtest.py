@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Advanced Speedtest CLI - A cross-platform speedtest utility
-Version: 2.1.0
+Version: 2.2.0
 Author: Shakil Ahmed
 Email: shakilofficial0@gmail.com
 """
@@ -31,7 +31,7 @@ init(autoreset=True)
 
 class Config:
     """Configuration constants"""
-    VERSION = "2.1.0"
+    VERSION = "2.2.0"
     AUTHOR = "Shakil Ahmed"
     GITHUB_REPO_LINK = "https://github.com/shakilofficial0/adv-speedtest-cli"
     EMAIL = "shakilofficial0@gmail.com"

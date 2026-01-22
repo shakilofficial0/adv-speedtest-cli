@@ -1,13 +1,5 @@
-adv-speedtest-cli (2.1.0-1) focal; urgency=medium
+adv-speedtest-cli (2.2.0-1) focal; urgency=medium
 
-  * Enhanced Result Sharing with full speedtest.net API integration
-  * Improved latency data structure with TCP metrics
-  * Cookie-based authentication support
-  * Adaptive download testing with stabilization detection
-  * WebSocket ping testing functionality
-  * Configurable parallel connections (1-64)
-  * Color-coded result visualization
-  * Production-ready code with debug statements removed
-  * Comprehensive error handling and user feedback
+  * Bug fix
 
  -- Shakil Ahmed <shakilofficial0@gmail.com>  Wed, 22 Jan 2026 00:00:00 +0000
