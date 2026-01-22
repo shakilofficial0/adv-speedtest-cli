@@ -3,6 +3,7 @@
 
 [![PyPI version](https://badge.fury.io/py/adv-speedtest-cli.svg?nocache=1)](https://pypi.org/project/adv-speedtest-cli/)
 [![Python Version](https://img.shields.io/badge/python-3.7+-3776ab?style=flat-square&logo=python)](https://www.python.org/)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu_Apt-20.04+-3776ab?style=flat-square)](https://www.python.org/)
 [![Version](https://img.shields.io/badge/version-2.1.0-brightgreen?style=flat-square)](https://github.com/shakilofficial0/adv-speedtest-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-cross--platform-orange?style=flat-square)](README.md)
@@ -122,7 +123,41 @@ pip install adv-speedtest-cli --break-system-packages
 python3 -m advanced_speedtest_cli
 ```
 
-### Option 2: Install from Source
+### Option 2: Install from PPA (Ubuntu/Debian)
+
+**Quick Installation (Ubuntu 20.04+, Debian 11+):**
+```bash
+# Add PPA repository
+sudo add-apt-repository ppa:shakilofficialdll/adv-speedtest-cli
+
+# Update package list
+sudo apt-get update
+
+# Install the package
+sudo apt-get install adv-speedtest-cli
+
+# Run immediately
+adv-speedtest-cli
+```
+
+**Uninstall:**
+```bash
+# Remove the package
+sudo apt-get remove adv-speedtest-cli
+
+# Remove PPA (optional)
+sudo add-apt-repository --remove ppa:shakilofficialdll/adv-speedtest-cli
+```
+
+**Supported Systems:**
+- ✅ Ubuntu 20.04 LTS (Focal)
+- ✅ Ubuntu 22.04 LTS (Jammy)
+- ✅ Ubuntu 24.04 LTS (Noble)
+- ✅ Ubuntu 25.10 LTS (Questing)
+- ✅ Ubuntu 26.04 LTS (Resolute)
+- ✅ Debian 11+ (Bullseye and later)
+
+### Option 3: Install from Source
 
 **Prerequisites:**
 Ensure Python 3.7+ is installed:
