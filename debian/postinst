@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 
-if [ "$1" = "configure" ]; then
-    update-alternatives --install /usr/bin/adv-speedtest-cli adv-speedtest-cli /usr/bin/speedtest 10 || true
-fi
+# Post-installation script for adv-speedtest-cli
+# Entry point is automatically created by setuptools
+
+exit 0

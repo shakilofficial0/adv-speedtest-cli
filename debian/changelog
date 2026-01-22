@@ -1,4 +1,4 @@
-adv-speedtest-cli (2.2.0-1) focal; urgency=medium
+adv-speedtest-cli (2.1.0-1) focal; urgency=medium
 
   * Enhanced Result Sharing with full speedtest.net API integration
   * Improved latency data structure with TCP metrics
@@ -11,9 +11,3 @@ adv-speedtest-cli (2.2.0-1) focal; urgency=medium
   * Comprehensive error handling and user feedback
 
  -- Shakil Ahmed <shakilofficial0@gmail.com>  Wed, 22 Jan 2026 00:00:00 +0000
-
-adv-speedtest-cli (2.1.0-1) focal; urgency=medium
-
-  * Initial release for Ubuntu/Debian
-
- -- Shakil Ahmed <shakilofficial0@gmail.com>  Wed, 15 Jan 2026 00:00:00 +0000
