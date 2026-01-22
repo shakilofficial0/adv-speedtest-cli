@@ -2,7 +2,7 @@ Source: adv-speedtest-cli
 Section: net
 Priority: optional
 Maintainer: Shakil Ahmed <shakilofficial0@gmail.com>
-Build-Depends: debhelper-compat (= 13), python3-setuptools, python3-all
+Build-Depends: debhelper-compat (= 13), python3-setuptools, python3-all, dh-python
 Standards-Version: 4.5.1
 Homepage: https://github.com/shakilofficial0/adv-speedtest-cli
 Vcs-Git: https://github.com/shakilofficial0/adv-speedtest-cli.git
