@@ -1,4 +1,5 @@
-# 🚀 Advanced Speedtest CLI
+
+# 🚀 Adv Speedtest CLI
 
 [![PyPI version](https://badge.fury.io/py/adv-speedtest-cli.svg?nocache=1)](https://pypi.org/project/adv-speedtest-cli/)
 [![Python Version](https://img.shields.io/badge/python-3.7+-3776ab?style=flat-square&logo=python)](https://www.python.org/)
@@ -6,7 +7,16 @@
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-cross--platform-orange?style=flat-square)](README.md)
 
+
+
 > A **sophisticated**, **cross-platform** command-line utility for measuring internet speed with precision. Engineered for accuracy, optimized for performance, and designed for modern networks.
+
+---
+
+
+░█▀▀░█▀█░█▀▀░█▀▀░█▀▄░▀█▀░█▀▀░█▀▀░▀█▀░░░░░█▀▀░█░░░▀█▀
+░▀▀█░█▀▀░█▀▀░█▀▀░█░█░░█░░█▀▀░▀▀█░░█░░▄▄▄░█░░░█░░░░█░
+░▀▀▀░▀░░░▀▀▀░▀▀▀░▀▀░░░▀░░▀▀▀░▀▀▀░░▀░░░░░░▀▀▀░▀▀▀░▀▀▀
 
 ---
 
