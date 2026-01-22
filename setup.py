@@ -16,7 +16,7 @@ requirements = [req.strip() for req in requirements if req.strip() and not req.s
 
 setup(
     name="adv-speedtest-cli",
-    version="1.0.1",
+    version="2.1.0",
     author="Shakil Ahmed",
     author_email="shakilofficial0@gmail.com",
     description="A sophisticated cross-platform command-line utility for measuring internet speed with precision",

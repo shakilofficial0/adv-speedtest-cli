@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Advanced Speedtest CLI - A cross-platform speedtest utility
-Version: 1.0.0
+Version: 2.1.0
 Author: Shakil Ahmed
 Email: shakilofficial0@gmail.com
 """
@@ -31,7 +31,7 @@ init(autoreset=True)
 
 class Config:
     """Configuration constants"""
-    VERSION = "1.0.1"
+    VERSION = "2.1.0"
     AUTHOR = "Shakil Ahmed"
     GITHUB_REPO_LINK = "https://github.com/shakilofficial0/adv-speedtest-cli"
     EMAIL = "shakilofficial0@gmail.com"
@@ -802,6 +802,11 @@ class State:
         
         # Fallback for string (legacy)
         return str(self.selected_server)
+    
+    @property
+    def current_server(self) -> Optional[dict]:
+        """Get current server (alias for selected_server for backward compatibility)"""
+        return self.selected_server
 
 
 class Display:
@@ -2305,14 +2310,75 @@ class SpeedTest:
             print("Press Enter to see final results...")
             input()
             
-            # Build result with all test data
+            # Build latency data in correct format for API
+            # Build main latency object with TCP stats
+            latency_data = {}
+            if ping_stats:
+                latency_data = {
+                    "connectionProtocol": "wss",
+                    "tcp": {
+                        "jitter": ping_stats.get('stddev', 0),
+                        "rtt": {
+                            "iqm": ping_stats.get('avg', 0),
+                            "mean": ping_stats.get('avg', 0),
+                            "median": ping_stats.get('median', 0),
+                            "min": ping_stats.get('min', 0),
+                            "max": ping_stats.get('max', 0)
+                        },
+                        "count": ping_stats.get('count', 0),
+                        "samples": [ping_stats.get('avg', 0)] * ping_stats.get('count', 10)  # Use avg value for samples
+                    }
+                }
+            
+            # Build download latency data
+            download_latency_data = {}
+            if download_latency:
+                download_latency_data = {
+                    "tcp": {
+                        "jitter": download_latency.get('stddev', 0) if isinstance(download_latency, dict) else 0,
+                        "rtt": {
+                            "iqm": download_latency.get('avg', 0) if isinstance(download_latency, dict) else 0,
+                            "mean": download_latency.get('avg', 0) if isinstance(download_latency, dict) else 0,
+                            "median": download_latency.get('median', 0) if isinstance(download_latency, dict) else 0,
+                            "min": download_latency.get('min', 0) if isinstance(download_latency, dict) else 0,
+                            "max": download_latency.get('max', 0) if isinstance(download_latency, dict) else 0
+                        },
+                        "count": download_latency.get('count', 0) if isinstance(download_latency, dict) else 0,
+                        "elapsed": download_stats.get('duration', 0) * 1000,  # Convert to milliseconds
+                        "timestamp": time.time() * 1000  # Current timestamp in milliseconds
+                    }
+                }
+            
+            # Build upload latency data
+            upload_latency_data = {}
+            if upload_latency:
+                upload_latency_data = {
+                    "tcp": {
+                        "jitter": upload_latency.get('stddev', 0) if isinstance(upload_latency, dict) else 0,
+                        "rtt": {
+                            "iqm": upload_latency.get('avg', 0) if isinstance(upload_latency, dict) else 0,
+                            "mean": upload_latency.get('avg', 0) if isinstance(upload_latency, dict) else 0,
+                            "median": upload_latency.get('median', 0) if isinstance(upload_latency, dict) else 0,
+                            "min": upload_latency.get('min', 0) if isinstance(upload_latency, dict) else 0,
+                            "max": upload_latency.get('max', 0) if isinstance(upload_latency, dict) else 0
+                        },
+                        "count": upload_latency.get('count', 0) if isinstance(upload_latency, dict) else 0,
+                        "elapsed": upload_stats.get('duration', 0) * 1000,  # Convert to milliseconds
+                        "timestamp": time.time() * 1000  # Current timestamp in milliseconds
+                    }
+                }
+            
+            # Build result with all test data in correct format
             return {
                 "ping": ping_stats.get('avg', 0),
                 "download": download_stats.get('speed', 0),
                 "upload": upload_stats.get('speed', 0),
-                "server": server.get('name', 'Unknown') if server else "N/A",
-                "download_latency": download_latency,
-                "upload_latency": upload_latency,
+                "server": server,
+                "bytes_received": download_stats.get('bytes', 0),
+                "bytes_sent": upload_stats.get('bytes', 0),
+                "latency": latency_data,
+                "download_latency": download_latency_data,
+                "upload_latency": upload_latency_data,
                 "download_speeds": {
                     "combined": download_stats.get('speed', 0),
                     "average": download_stats.get('speed', 0)
@@ -2326,8 +2392,127 @@ class SpeedTest:
             raise  # Re-raise to be caught by the menu handler
     
     @staticmethod
+    def share_results(result: dict, state: State = None) -> Optional[str]:
+        """Share results to speedtest.net API
+        
+        Args:
+            result: Test results dict with ping, download, upload, and latency data
+            state: Application state containing user information
+            
+        Returns:
+            Share URL or None if failed
+        """
+        print("SHARING RESULTS TO SPEEDTEST.NET")
+        try:
+            # Get server info
+            server = result.get('server', {})
+            if not server:
+                print("✗ No server information available for sharing")
+                return None
+            
+            if 'id' not in server:
+                print("✗ Server ID not found in server data")
+                return None
+            
+            # Convert speeds to Kbps
+            download_kbps = int(round(result['download'] * 1000.0, 0))
+            upload_kbps = int(round(result['upload'] * 1000.0, 0))
+            ping = int(round(result['ping'], 0))
+            
+            # Calculate hash as per speedtest API: md5(ping-upload-download-297aae72)
+            hash_input = f"{ping}-{upload_kbps}-{download_kbps}-297aae72"
+            result_hash = hashlib.md5(hash_input.encode()).hexdigest()
+            
+            # Get user data for ISP name
+            isp_name = "Unknown"
+            if state and state.current_user:
+                user_data = CookieManager.load_user_data(state.current_user)
+                if user_data:
+                    isp_name = user_data.get('isp', 'Unknown')
+            
+            # Prepare ping samples from latency data
+            ping_samples = result.get('latency', {}).get('tcp', {}).get('samples', [ping] * 10)
+            if not ping_samples:
+                ping_samples = [ping] * 10
+            
+            # Build JSON payload matching the API requirements
+            json_data = {
+                "serverid": int(server.get('id', 0)),
+                "testmethod": "wss,xhrs,xhrs",
+                "source": "st4-js",
+                "ispName": isp_name,
+                "ping": ping,
+                "pings": ping_samples,
+                "latency": result.get('latency', {}),
+                "uploadMeasurementMethod": "remote",
+                "upload": upload_kbps,
+                "download": download_kbps,
+                "downloadLatency": result.get('download_latency', {}),
+                "uploadLatency": result.get('upload_latency', {}),
+                "hash": result_hash,
+                "serverSelection": {}
+            }
+            
+            # Get cookies from storage
+            cookies_dict = {}
+            if state and state.current_user:
+                cookies = CookieManager.load_cookies(state.current_user)
+                if cookies and 'stnetsid' in cookies:
+                    cookies_dict['stnetsid'] = cookies['stnetsid']
+            
+            # Build headers
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+                'Referer': 'https://www.speedtest.net/',
+            }
+            
+            # Post to speedtest.net API with JSON data
+            response = requests.post(
+                'https://www.speedtest.net/api/api.php',
+                json=json_data,
+                headers=headers,
+                cookies=cookies_dict,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                print(f"✗ Failed to share results (Status: {response.status_code})")
+                return None
+            
+            # Parse JSON response
+            try:
+                response_json = response.json()
+                
+                if 'resultid' not in response_json:
+                    print("✗ No resultid in response from speedtest.net API")
+                    return None
+                
+                result_id = response_json['resultid']
+                share_url = f'https://www.speedtest.net/result/{result_id}'
+                
+                return share_url
+                
+            except ValueError as e:
+                print(f"✗ Failed to parse JSON response: {str(e)}")
+                return None
+            
+        except requests.exceptions.Timeout:
+            print("✗ Request timeout when sharing results")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            print(f"✗ Connection error when sharing results: {str(e)}")
+            return None
+        except Exception as e:
+            print(f"✗ Error sharing results: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    @staticmethod
     def run_test_and_share(state: State = None) -> dict:
-        """Run speed test and prepare for sharing
+        """Run speed test and share results
         
         Args:
             state: Application state containing user and server information
@@ -2342,6 +2527,9 @@ class SpeedTest:
             
             # Call the standard run_test to get base results
             result = SpeedTest.run_test(state)
+
+            print(result)
+            
             
             # Check if there was an error in the test
             if "error" in result:
@@ -2355,17 +2543,16 @@ class SpeedTest:
                     "error": result.get("error", "Test failed")
                 }
             
-           
+        
             
-            # Generate a unique share link (placeholder implementation)
-            test_data = f"{result['ping']}{result['download']}{result['upload']}{datetime.now()}"
-            share_id = hashlib.md5(test_data.encode()).hexdigest()[:8].upper()
-            share_link = f"https://speedtest.example.com/results/{share_id}"
+            # Share results
+            share_url = SpeedTest.share_results(result, state)
             
-            
-            # Add share_link to result and return
-            result["share_link"] = share_link
+            result["share_link"] = share_url if share_url else "N/A"
+
+            input("Press Enter to continue check...")
             return result
+            
         except KeyboardInterrupt:
             raise  # Re-raise to be caught by the menu handler
 

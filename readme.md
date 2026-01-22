@@ -2,7 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/adv-speedtest-cli.svg?nocache=1)](https://pypi.org/project/adv-speedtest-cli/)
 [![Python Version](https://img.shields.io/badge/python-3.7+-3776ab?style=flat-square&logo=python)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.0.1-brightgreen?style=flat-square)](https://github.com/shakilofficial0/adv-speedtest-cli)
+[![Version](https://img.shields.io/badge/version-2.1.0-brightgreen?style=flat-square)](https://github.com/shakilofficial0/adv-speedtest-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-cross--platform-orange?style=flat-square)](README.md)
 
