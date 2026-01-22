@@ -10,7 +10,7 @@ Vcs-Browser: https://github.com/shakilofficial0/adv-speedtest-cli
 
 Package: adv-speedtest-cli
 Architecture: all
-Depends: ${python3:Depends}, python3 (>= 3.7), python3-requests, python3-websockets, python3-colorama, python3-tqdm
+Depends: ${python3:Depends}, ${misc:Depends},python3 (>= 3.7), python3-requests, python3-websockets, python3-colorama, python3-tqdm
 Description: Advanced Speedtest CLI - A cross-platform speedtest utility
  A sophisticated command-line utility for measuring internet speed with precision.
  Engineered for accuracy, optimized for performance, and designed for modern networks.

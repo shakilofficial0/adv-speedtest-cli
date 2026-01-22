@@ -5,3 +5,4 @@ set -e
 # Entry point is automatically created by setuptools
 
 exit 0
+#DEBHELPER#
